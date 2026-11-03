@@ -1,17 +1,19 @@
-from fastapi import  FastAPI
+from fastapi import FastAPI
+from app.core.config import get_settings
 from app.api.routes import health
 from app.api.router import router
 
 
-def create_app()->FastAPI:
-    app=FastAPI(
-        title="URL Shortener API",
-        description="A simple URL shortener API built with FastAPI",
-        version="0.1.0"
+def create_app(settings: Settings | None = None) -> FastAPI:
+    settings = settings or get_settings()
+    app = FastAPI(
+        title=settings.app_name,
+        version=settings.app_version,
+        description=f"{settings.app_name} API",
+        debug=settings.debug,
     )
+    app.include_router(health.router)
+    app.include_router(router)
     return app
 
-app=create_app()
-
-app.include_router(router)
-app.include_router(health.router)
+app = create_app()
