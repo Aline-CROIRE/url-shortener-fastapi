@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import RedirectResponse
 
-from app.storage.memory import url_store
+from app.api.dependencies import UrlServiceDep
 
 router = APIRouter(tags=["Redirect"])
 
@@ -20,16 +20,13 @@ router = APIRouter(tags=["Redirect"])
         status.HTTP_404_NOT_FOUND: {"description": "Short code does not exist"},
     },
 )
-async def redirect_to_original(short_code: str) -> RedirectResponse:
-    saved_url = url_store.get(short_code)
+async def redirect_to_original(short_code: str, service: UrlServiceDep) -> RedirectResponse:
+    record = await service.get_url(short_code)
 
-    if saved_url is None:
+    if record is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Short URL not found",
         )
 
-    return RedirectResponse(
-        url=saved_url["original_url"],
-        status_code=status.HTTP_302_FOUND,
-    )
+    return RedirectResponse(url=record.original_url, status_code=status.HTTP_302_FOUND)

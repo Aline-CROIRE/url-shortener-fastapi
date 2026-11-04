@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from app.api.router import router
 from app.api.routes import health, redirect
 from app.core.config import Settings, get_settings
+from app.storage.memory import InMemoryUrlRepository
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -15,6 +16,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     # Application-level data: every request can read it via request.app.state
     app.state.settings = settings
+    app.state.repository = InMemoryUrlRepository()
 
     app.include_router(health.router)
     app.include_router(router)
