@@ -1,5 +1,6 @@
 from functools import lru_cache
 from typing import Literal
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
@@ -17,6 +18,8 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     # "memory" = Python dict (no setup needed), "redis" = Redis server at redis_url
     storage_backend: Literal["memory", "redis"] = "memory"
+    # Number of Gunicorn worker processes in production (see gunicorn.conf.py)
+    workers: int = Field(default=2, ge=1)
 
 @lru_cache()
 def get_settings() -> Settings:
