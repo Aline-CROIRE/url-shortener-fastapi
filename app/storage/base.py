@@ -29,3 +29,7 @@ class UrlRepository(Protocol):
     async def get(self, short_code: str) -> UrlRecord | None:
         """Return the record for this short code, or None if it does not exist."""
         ...
+
+    async def ping(self) -> bool:
+        """Return True if the storage is reachable (used by the health check)."""
+        ...

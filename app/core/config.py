@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     debug: bool = False
     base_url: str = "http://localhost:8000"
     redis_url: str = "redis://localhost:6379/0"
+    # "memory" = Python dict (no setup needed), "redis" = Redis server at redis_url
+    storage_backend: Literal["memory", "redis"] = "memory"
 
 @lru_cache()
 def get_settings() -> Settings:

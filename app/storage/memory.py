@@ -21,3 +21,6 @@ class InMemoryUrlRepository:
 
     async def get(self, short_code: str) -> UrlRecord | None:
         return self._store.get(short_code)
+
+    async def ping(self) -> bool:
+        return True  # a dict is always available
