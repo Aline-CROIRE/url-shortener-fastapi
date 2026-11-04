@@ -100,6 +100,14 @@ def test_redirect_unknown_code_returns_404(client: TestClient) -> None:
     assert_error_shape(response.json(), "url_not_found")
 
 
+def test_badly_formed_code_returns_422(client: TestClient) -> None:
+    # Wrong length or characters: rejected before any storage lookup
+    for path in ("/abc", "/api/v1/urls/abc", "/toolong12", "/bad-cod"):
+        response = client.get(path)
+        assert response.status_code == 422, path
+        assert_error_shape(response.json(), "validation_error")
+
+
 def test_redirect_route_does_not_hide_docs(client: TestClient) -> None:
     # The catch-all /{short_code} is included last, so /docs still works
     assert client.get("/docs").status_code == 200

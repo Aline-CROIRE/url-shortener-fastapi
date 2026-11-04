@@ -10,7 +10,7 @@ class Settings(BaseSettings):
         extra="ignore",
 
     )
-    app_name: str = "Url Shortner Dev"
+    app_name: str = "URL Shortener"
     app_version: str = "0.1.0"
     environment: Literal["development", "production", "testing"] = "development"
     debug: bool = False
