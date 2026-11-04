@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 
+from app.core.exceptions import ShortCodeGenerationError, UrlNotFoundError
 from app.storage.base import UrlRecord, UrlRepository
 from app.utils.codes import generate_code
 
@@ -27,7 +28,10 @@ class UrlShortenerService:
             )
             if await self._repository.save_if_absent(record):
                 return record
-        raise RuntimeError("Could not generate a unique short code")
+        raise ShortCodeGenerationError()
 
-    async def get_url(self, short_code: str) -> UrlRecord | None:
-        return await self._repository.get(short_code)
+    async def get_url(self, short_code: str) -> UrlRecord:
+        record = await self._repository.get(short_code)
+        if record is None:
+            raise UrlNotFoundError(short_code)
+        return record

@@ -8,6 +8,9 @@ from redis.asyncio import Redis
 from app.api.router import router
 from app.api.routes import health, redirect
 from app.core.config import Settings, get_settings
+from app.core.error_handlers import register_exception_handlers
+from app.core.logging import setup_logging
+from app.core.middleware import RequestLoggingMiddleware
 from app.storage.memory import InMemoryUrlRepository
 from app.storage.redis import RedisUrlRepository
 
@@ -16,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
+    setup_logging(settings.debug)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -45,11 +49,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         title=settings.app_name,
         version=settings.app_version,
         description=f"{settings.app_name} API",
-        debug=settings.debug,
+        # FastAPI(debug=True) would send stack traces to clients and skip our JSON
+        # 500 handler, so it stays off. settings.debug only changes the log level.
         lifespan=lifespan,
     )
     # Application-level data: every request can read it via request.app.state
     app.state.settings = settings
+
+    app.add_middleware(RequestLoggingMiddleware)
+    register_exception_handlers(app)
 
     app.include_router(health.router)
     app.include_router(router)

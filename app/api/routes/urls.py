@@ -1,6 +1,7 @@
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, status
 
 from app.api.dependencies import UrlServiceDep
+from app.api.responses import NOT_FOUND, STORAGE_UNAVAILABLE, VALIDATION_ERROR
 from app.schemas.url import URLCreate, URLRead
 from app.services.url_shortener import UrlShortenerService
 from app.storage.base import UrlRecord
@@ -22,6 +23,7 @@ def to_url_read(record: UrlRecord, service: UrlShortenerService) -> URLRead:
     status_code=status.HTTP_201_CREATED,
     summary="Create a short URL",
     description="Takes a long URL and returns a new 7-character short code and short link.",
+    responses={**VALIDATION_ERROR, **STORAGE_UNAVAILABLE},
 )
 async def create_short_url(payload: URLCreate, service: UrlServiceDep) -> URLRead:
     record = await service.create_short_url(str(payload.original_url))
@@ -32,15 +34,8 @@ async def create_short_url(payload: URLCreate, service: UrlServiceDep) -> URLRea
     "/{short_code}",
     summary="Get short URL info",
     description="Returns the details of a short code without redirecting.",
-    responses={status.HTTP_404_NOT_FOUND: {"description": "Short code does not exist"}},
+    responses={**NOT_FOUND, **VALIDATION_ERROR, **STORAGE_UNAVAILABLE},
 )
 async def get_short_url(short_code: str, service: UrlServiceDep) -> URLRead:
-    record = await service.get_url(short_code)
-
-    if record is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Short URL not found",
-        )
-
+    record = await service.get_url(short_code)  # raises UrlNotFoundError -> 404
     return to_url_read(record, service)
