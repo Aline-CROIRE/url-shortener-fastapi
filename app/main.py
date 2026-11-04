@@ -1,7 +1,8 @@
 from fastapi import FastAPI
-from app.core.config import get_settings
-from app.api.routes import health
+
 from app.api.router import router
+from app.api.routes import health, redirect
+from app.core.config import Settings, get_settings
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -12,8 +13,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         description=f"{settings.app_name} API",
         debug=settings.debug,
     )
+    # Application-level data: every request can read it via request.app.state
+    app.state.settings = settings
+
     app.include_router(health.router)
     app.include_router(router)
+    # Catch-all "/{short_code}" route: must be included LAST so it
+    # does not hide /health, /docs, /openapi.json or /api/v1/...
+    app.include_router(redirect.router)
     return app
+
 
 app = create_app()
