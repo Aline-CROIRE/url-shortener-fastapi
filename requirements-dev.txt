@@ -1,0 +1,14 @@
+# Local development and tests: everything in requirements.txt plus test tools.
+-r requirements.txt
+
+# Testing
+pytest==9.1.1
+iniconfig==2.3.1
+pluggy==1.6.0
+packaging==26.3
+Pygments==2.21.0
+
+# HTTP client used by FastAPI's TestClient
+httpx==0.28.1
+httpcore==1.0.9
+certifi==2026.10.23

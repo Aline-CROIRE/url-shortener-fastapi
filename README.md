@@ -49,7 +49,10 @@ equivalent (see [Flask requirement → FastAPI equivalent](#flask-requirement--f
 - Redis 7+ (only if you use `STORAGE_BACKEND=redis` outside Docker)
 
 Main libraries: FastAPI, Pydantic v2, pydantic-settings, redis-py (asyncio), Uvicorn,
-Gunicorn + uvicorn-worker, pytest. Exact pinned versions are in [requirements.txt](requirements.txt).
+Gunicorn + uvicorn-worker, pytest. All versions are pinned:
+
+- [requirements.txt](requirements.txt): **runtime** dependencies only (what the Docker image installs)
+- [requirements-dev.txt](requirements-dev.txt): `-r requirements.txt` plus test tools (pytest, httpx)
 
 ## Project structure
 
@@ -84,6 +87,8 @@ Dockerfile                   # multi-stage, non-root, Gunicorn by default
 docker-compose.yml           # development: app (hot reload) + Redis
 docker-compose.prod.yml      # production-like: Gunicorn workers + Redis
 gunicorn.conf.py             # Gunicorn settings (workers from WORKERS)
+requirements.txt             # runtime dependencies (pinned)
+requirements-dev.txt         # runtime + test dependencies (pinned)
 ```
 
 ## Local setup (virtual environment)
@@ -95,8 +100,8 @@ Commands are for **Windows PowerShell**.
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 
-# 2. Install dependencies
-pip install -r requirements.txt
+# 2. Install dependencies (runtime + test tools)
+pip install -r requirements-dev.txt
 
 # 3. Create your local settings file
 Copy-Item .env.example .env
