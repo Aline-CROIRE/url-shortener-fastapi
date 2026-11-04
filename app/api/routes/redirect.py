@@ -12,16 +12,14 @@ router = APIRouter(tags=["Redirect"])
     "/{short_code}",
     summary="Redirect to the original URL",
     description=(
-        "Sends the browser to the original URL with **302 Found** and a `Location` header.\n\n"
-        "Note: Swagger UI's *Try it out* follows the redirect inside the browser, so it may "
-        "show *Failed to fetch*. Open `http://localhost:8000/<short_code>` in a browser tab, "
-        "or use `curl -i`, to see the 302."
+        "Swagger shows *Failed to fetch* here because the browser follows the redirect. "
+        "Open the short link in a browser tab instead."
     ),
     status_code=status.HTTP_302_FOUND,
     response_class=RedirectResponse,
     responses={
         status.HTTP_302_FOUND: {
-            "description": "Redirect to the original URL",
+            "description": "Redirect",
             "headers": {
                 "Location": {
                     "description": "The original URL",

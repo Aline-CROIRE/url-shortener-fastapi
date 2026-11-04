@@ -12,13 +12,12 @@ router = APIRouter(tags=["Health"])
 @router.get(
     "/health",
     summary="Health check",
-    description="Returns 200 when the app and its storage are working, 503 when storage is down.",
     responses={
         status.HTTP_200_OK: {
             "content": {"application/json": {"example": {"status": "healthy", "storage": "redis"}}}
         },
         status.HTTP_503_SERVICE_UNAVAILABLE: {
-            "description": "Storage (Redis) is not reachable",
+            "description": "Redis is down",
             "content": {"application/json": {"example": {"status": "unhealthy", "storage": "redis"}}},
         },
     },

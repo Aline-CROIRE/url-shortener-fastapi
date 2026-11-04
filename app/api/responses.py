@@ -21,7 +21,7 @@ def _error_doc(description: str, code: str, message: str, details: Any = None) -
 
 NOT_FOUND: dict[int | str, dict[str, Any]] = {
     status.HTTP_404_NOT_FOUND: _error_doc(
-        "Short code does not exist",
+        "Not found",
         "url_not_found",
         "Short URL 'aB3dE9x' was not found.",
         {"short_code": "aB3dE9x"},
@@ -29,7 +29,7 @@ NOT_FOUND: dict[int | str, dict[str, Any]] = {
 }
 VALIDATION_ERROR: dict[int | str, dict[str, Any]] = {
     status.HTTP_422_UNPROCESSABLE_CONTENT: _error_doc(
-        "Invalid input (bad URL in the body, or badly formed short code in the path)",
+        "Invalid input",
         "validation_error",
         "The request data is invalid.",
         [
@@ -43,14 +43,14 @@ VALIDATION_ERROR: dict[int | str, dict[str, Any]] = {
 }
 INTERNAL_ERROR: dict[int | str, dict[str, Any]] = {
     status.HTTP_500_INTERNAL_SERVER_ERROR: _error_doc(
-        "Unexpected server error (details are only written to the server log)",
+        "Server error",
         "internal_server_error",
         "An unexpected error occurred.",
     ),
 }
 STORAGE_UNAVAILABLE: dict[int | str, dict[str, Any]] = {
     status.HTTP_503_SERVICE_UNAVAILABLE: _error_doc(
-        "Storage (Redis) is not reachable",
+        "Redis is down",
         "storage_unavailable",
         "The storage service is temporarily unavailable. Please try again later.",
     ),

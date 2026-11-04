@@ -9,7 +9,7 @@ from app.utils.codes import CODE_LENGTH
 ShortCodePath = Annotated[
     str,
     Path(
-        description=f"The {CODE_LENGTH}-character short code (letters and digits)",
+        description=f"{CODE_LENGTH} letters or digits",
         pattern=f"^[A-Za-z0-9]{{{CODE_LENGTH}}}$",
         examples=["aB3dE9x"],
     ),
