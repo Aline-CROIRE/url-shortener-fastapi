@@ -5,7 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
 class URLCreate(BaseModel):
     original_url: HttpUrl = Field(
-        description="The long URL to shorten. Must start with http:// or https://",
+        description="Long URL (http or https)",
         examples=["https://www.python.org/about/"],
     )
 
@@ -24,7 +24,7 @@ class URLRead(BaseModel):
         }
     )
 
-    short_code: str = Field(description="7-character code made of letters and digits")
-    original_url: str = Field(description="The long URL the short code points to")
-    short_url: str = Field(description="Full short link to share")
-    created_at: datetime = Field(description="When the short URL was created (UTC)")
+    short_code: str = Field(description="7 letters or digits")
+    original_url: str = Field(description="Long URL")
+    short_url: str = Field(description="Link to share")
+    created_at: datetime = Field(description="Creation time (UTC)")

@@ -12,16 +12,12 @@ from app.storage.base import UrlRecord
 router = APIRouter(prefix="/urls", tags=["URLs"])
 
 CREATE_EXAMPLES = {
-    "simple": {
-        "summary": "A simple URL",
+    "valid": {
+        "summary": "Valid URL",
         "value": {"original_url": "https://www.python.org/about/"},
     },
-    "long_with_query": {
-        "summary": "A long URL with a query string",
-        "value": {"original_url": "https://www.google.com/search?q=fastapi+url+shortener&hl=en"},
-    },
     "invalid": {
-        "summary": "Invalid URL (returns 422)",
+        "summary": "Invalid URL (422)",
         "value": {"original_url": "not-a-url"},
     },
 }
@@ -40,12 +36,7 @@ def to_url_read(record: UrlRecord, service: UrlShortenerService) -> URLRead:
     "",
     status_code=status.HTTP_201_CREATED,
     summary="Create a short URL",
-    description=(
-        "Validates the long URL (must be `http://` or `https://`), generates a unique "
-        "7-character code and stores it.\n\n"
-        "Returns **201 Created** with the code and the full `short_url` to share."
-    ),
-    response_description="The short URL was created",
+    response_description="Created",
     responses={**VALIDATION_ERROR, **INTERNAL_ERROR, **STORAGE_UNAVAILABLE},
 )
 async def create_short_url(
@@ -58,12 +49,9 @@ async def create_short_url(
 
 @router.get(
     "/{short_code}",
-    summary="Get short URL info",
-    description=(
-        "Returns the details of a short code **without redirecting**. "
-        "Useful to check where a short link goes before opening it."
-    ),
-    response_description="The short URL details",
+    summary="Get short URL details",
+    description="Shows where a short code points, without redirecting.",
+    response_description="Details",
     responses={**NOT_FOUND, **VALIDATION_ERROR, **INTERNAL_ERROR, **STORAGE_UNAVAILABLE},
 )
 async def get_short_url(short_code: ShortCodePath, service: UrlServiceDep) -> URLRead:

@@ -16,24 +16,12 @@ from app.storage.redis import RedisUrlRepository
 
 logger = logging.getLogger(__name__)
 
-API_DESCRIPTION = """
-Create short links and redirect visitors to the original URL.
-
-**How to use it**
-1. `POST /api/v1/urls` with a long URL to get a short code.
-2. Open `/{short_code}` in a browser to be redirected (302).
-3. `GET /api/v1/urls/{short_code}` to see the details without redirecting.
-
-**Errors** always use the same JSON shape:
-`{"error": {"code": "...", "message": "...", "details": ...}}`
-
-Every response carries an `X-Request-ID` header to match it with the server logs.
-"""
+API_DESCRIPTION = 'Errors use one shape: `{"error": {"code", "message", "details"}}`.'
 
 OPENAPI_TAGS = [
-    {"name": "URLs", "description": "Create short URLs and look up their details (versioned under `/api/v1`)."},
-    {"name": "Redirect", "description": "Short links themselves: `/{short_code}` at the root."},
-    {"name": "Health", "description": "Liveness and storage check, used by Docker and monitoring."},
+    {"name": "URLs", "description": "Create and look up short URLs."},
+    {"name": "Redirect", "description": "Open a short link."},
+    {"name": "Health", "description": "App and storage status."},
 ]
 
 
@@ -68,7 +56,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(
         title=settings.app_name,
         version=settings.app_version,
-        summary="A small REST API that turns long URLs into short links.",
+        summary="Turn long URLs into short links.",
         description=API_DESCRIPTION,
         openapi_tags=OPENAPI_TAGS,
         # FastAPI(debug=True) would send stack traces to clients and skip our JSON
