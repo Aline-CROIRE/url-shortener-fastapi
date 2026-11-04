@@ -181,7 +181,7 @@ Copy [.env.example](.env.example) to `.env`. `.env` is git-ignored and must neve
 | `DEBUG` | `false` | `true` = more detailed logs. Stack traces are never sent to clients |
 | `BASE_URL` | `http://localhost:8000` | Public address used to build `short_url` (trailing `/` is removed) |
 | `STORAGE_BACKEND` | `memory` | `memory` (Python dict) or `redis` |
-| `REDIS_URL` | `redis://localhost:6379/0` | Redis connection URL (used when `STORAGE_BACKEND=redis`) |
+| `REDIS_URL` | `redis://127.0.0.1:6379/0` | Redis connection URL (used when `STORAGE_BACKEND=redis`). Use `127.0.0.1`, not `localhost`, on Windows (see Running the tests) |
 | `WORKERS` | `2` | Number of Gunicorn worker processes in production |
 
 ## Endpoints
@@ -286,8 +286,8 @@ a response example and its documented error responses (404/422/500/503) with the
 pytest
 ```
 
-The tests use `create_app()` with test settings (`STORAGE_BACKEND=memory`), so no Redis or
-Docker is needed. They cover:
+The unit and API tests use `create_app()` with test settings (`STORAGE_BACKEND=memory`), so
+no Redis or Docker is needed. They cover:
 
 - create (201), invalid URL and missing body (422), badly formed short code (422)
 - info (200), unknown code (404)
@@ -297,6 +297,27 @@ Docker is needed. They cover:
 - `X-Request-ID` header
 - service logic: collision retry and giving up after too many collisions
 - both repositories (in-memory and Redis with a fake client): `SET NX` behaviour
+
+### Integration tests (real Redis)
+
+[tests/test_redis_integration.py](tests/test_redis_integration.py) runs against a **real Redis**
+and is **skipped automatically** when Redis is not reachable. It checks the save/get round trip,
+that `SET NX` refuses an existing code, that 20 concurrent saves of the same code produce
+exactly one winner (atomicity), and the full API flow with `STORAGE_BACKEND=redis`.
+
+```powershell
+docker compose up -d redis          # Redis on 127.0.0.1:6379
+pytest                              # all tests, integration included
+pytest -m integration               # only the integration tests
+pytest -m "not integration"         # skip them
+docker compose down
+```
+
+The tests use Redis database **15** (`REDIS_TEST_URL`, default `redis://127.0.0.1:6379/15`)
+and delete only the keys they create.
+
+> Use `127.0.0.1` rather than `localhost` for Redis on Windows: `localhost` tries IPv6 (`::1`)
+> first, which the Docker port does not listen on, so every connection would wait for a timeout.
 
 ## Architecture
 
