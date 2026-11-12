@@ -3,3 +3,7 @@ __pycache__/
 *.pyc
 .env
 .pytest_cache/
+
+# Personal study files (not part of the graded project)
+CLAUDE.md
+learning-notes/
