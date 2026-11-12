@@ -1,5 +1,6 @@
 """The seed script: runs inside the test transaction (rolled back afterwards)."""
 
+import asyncio
 import random
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -10,6 +11,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
+from app.db.database import create_engine
 from app.models import URL, Click, User, url_tags
 from app.scripts import seed as seed_module
 from app.scripts.seed import SEED_EMAIL_DOMAIN, SeedCounts, reset_seeded_data, seed_database
@@ -137,3 +139,56 @@ def test_seeded_data_uses_url_tags_and_clicks(run_db: RunDb) -> None:
 
     links, clicks = run_db(work)
     assert links > 0 and clicks == 500
+
+
+# ---------- the random-code clash loop and the real command line ----------
+
+
+class RepeatFirstCode(random.Random):
+    """A random generator whose first two short codes are the same: forces a clash."""
+
+    def __init__(self, seed: int) -> None:
+        super().__init__(seed)
+        self.codes_made = 0
+
+    def choices(self, population: Any, weights: Any = None, *, cum_weights: Any = None, k: int = 1) -> list:
+        if population is seed_module.CODE_ALPHABET:
+            self.codes_made += 1
+            if self.codes_made <= 2:
+                return list("SameCod")
+        return super().choices(population, weights, cum_weights=cum_weights, k=k)
+
+
+def test_a_repeated_random_code_is_replaced(run_db: RunDb) -> None:
+    async def work(session: AsyncSession) -> list[str]:
+        rng = RepeatFirstCode(1)
+        await seed_database(await session.connection(), SeedCounts(users=1, urls=2, clicks=0), rng, now=NOW)
+        return list(await session.scalars(select(URL.short_code).order_by(URL.id)))
+
+    codes = run_db(work)
+
+    assert codes[0] == "SameCod"
+    assert codes[1] != "SameCod"  # the clash was noticed and a new code was drawn
+
+
+def test_command_line_seeds_and_resets(
+    test_settings: Settings, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    # The real CLI commits, so it runs against the TEST database and cleans up after
+    monkeypatch.setattr(seed_module, "get_settings", lambda: test_settings)
+    small = ["--users", "2", "--urls", "3", "--clicks", "10"]
+    try:
+        seed_module.main(small)
+        assert "Seeded 2 users, 3 URLs" in capsys.readouterr().out
+
+        seed_module.main([*small, "--reset"])
+        assert "Removed 2 seeded users" in capsys.readouterr().out
+    finally:
+        cleanup = create_engine(test_settings.database_url)
+
+        async def remove_seed() -> None:
+            async with cleanup.begin() as connection:
+                await reset_seeded_data(connection)
+            await cleanup.dispose()
+
+        asyncio.run(remove_seed())

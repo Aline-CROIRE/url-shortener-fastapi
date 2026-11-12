@@ -24,6 +24,7 @@ from app.repositories.click import ClickRepository
 from app.repositories.url import URLFilters, URLRepository
 
 PAGE_SIZE = 20
+NO_DATA_MESSAGE = "No URLs in the database yet. Run first:  python -m app.scripts.seed"
 
 
 @dataclass(frozen=True)
@@ -53,12 +54,17 @@ async def explain(connection: AsyncConnection, title: str, statement: Select[Any
 
 
 async def explain_report(connection: AsyncConnection) -> list[ExplainedQuery]:
-    """EXPLAIN ANALYZE the redirect lookup, the URL list and analytics."""
+    """EXPLAIN ANALYZE the redirect lookup, the URL list and analytics.
+
+    Returns an empty list when there is no URL to explain the queries with.
+    """
     url = (
         await connection.execute(
             select(URL.id, URL.short_code, URL.owner_id).order_by(desc(URL.click_count)).limit(1)
         )
-    ).one()  # the most clicked URL: the heaviest analytics case
+    ).first()  # the most clicked URL: the heaviest analytics case
+    if url is None:  # empty database: nothing realistic to explain
+        return []
     owner_urls = select(URL.created_at, URL.id).where(URL.owner_id == url.owner_id)
     bookmark = (
         await connection.execute(
@@ -96,6 +102,9 @@ async def explain_report(connection: AsyncConnection) -> list[ExplainedQuery]:
 
 
 def print_report(report: list[ExplainedQuery]) -> None:
+    if not report:
+        print(NO_DATA_MESSAGE)
+        return
     for item in report:
         print(f"\n{'=' * 100}\n{item.title}\n{'-' * 100}")
         for line in item.plan:
