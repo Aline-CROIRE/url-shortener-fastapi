@@ -1,12 +1,27 @@
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Response, status
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 
-from app.api.dependencies import get_repository, get_settings_from_app
+from app.api.dependencies import DbSession, get_repository, get_settings_from_app
 from app.core.config import Settings
 from app.storage.base import UrlRepository
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(tags=["Health"])
+
+
+async def database_is_up(db: DbSession) -> bool:
+    """Run the smallest possible query to prove PostgreSQL answers."""
+    try:
+        await db.execute(text("SELECT 1"))
+    except (SQLAlchemyError, OSError):
+        logger.warning("Database health check failed", exc_info=True)
+        return False
+    return True
 
 
 @router.get(
@@ -14,11 +29,19 @@ router = APIRouter(tags=["Health"])
     summary="Health check",
     responses={
         status.HTTP_200_OK: {
-            "content": {"application/json": {"example": {"status": "healthy", "storage": "redis"}}}
+            "content": {
+                "application/json": {
+                    "example": {"status": "healthy", "storage": "redis", "database": "ok"}
+                }
+            }
         },
         status.HTTP_503_SERVICE_UNAVAILABLE: {
-            "description": "Redis is down",
-            "content": {"application/json": {"example": {"status": "unhealthy", "storage": "redis"}}},
+            "description": "Storage or database is down",
+            "content": {
+                "application/json": {
+                    "example": {"status": "unhealthy", "storage": "redis", "database": "down"}
+                }
+            },
         },
     },
 )
@@ -26,8 +49,14 @@ async def check_health(
     response: Response,
     repository: Annotated[UrlRepository, Depends(get_repository)],
     settings: Annotated[Settings, Depends(get_settings_from_app)],
+    database_ok: Annotated[bool, Depends(database_is_up)],
 ) -> dict[str, str]:
-    if not await repository.ping():
+    storage_ok = await repository.ping()
+    healthy = storage_ok and database_ok
+    if not healthy:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-        return {"status": "unhealthy", "storage": settings.storage_backend}
-    return {"status": "healthy", "storage": settings.storage_backend}
+    return {
+        "status": "healthy" if healthy else "unhealthy",
+        "storage": settings.storage_backend,
+        "database": "ok" if database_ok else "down",
+    }
