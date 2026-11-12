@@ -32,6 +32,9 @@ WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
 COPY --chown=app:app app ./app
 COPY --chown=app:app gunicorn.conf.py .
+# Database migrations, so the container can run "alembic upgrade head"
+COPY --chown=app:app alembic.ini .
+COPY --chown=app:app alembic ./alembic
 
 USER app
 

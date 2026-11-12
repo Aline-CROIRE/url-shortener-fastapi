@@ -1,16 +1,37 @@
 from collections.abc import AsyncIterator, Iterator
+from pathlib import Path
 
 import pytest
+from alembic import command
+from alembic.config import Config
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from app.core.config import Settings
+from app.core.config import Settings, get_settings
 from app.db.database import get_db
 from app.main import create_app
 
 TEST_BASE_URL = "http://short.test/"  # trailing slash on purpose: it must be removed
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def alembic_config(database_url: str) -> Config:
+    """Alembic settings from alembic.ini, pointed at the given database."""
+    config = Config(str(PROJECT_ROOT / "alembic.ini"))
+    config.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
+    config.set_main_option("sqlalchemy.url", database_url)
+    return config
+
+
+@pytest.fixture(scope="session", autouse=True)
+def migrated_test_database() -> None:
+    """Once per test run: bring the TEST database to the newest migration.
+
+    The schema comes from Alembic, exactly like production (no create_all()).
+    """
+    command.upgrade(alembic_config(get_settings().test_database_url), "head")
 
 
 @pytest.fixture
@@ -79,6 +100,29 @@ def db_client(app: FastAPI, test_settings: Settings) -> Iterator[TestClient]:
             test_client.portal.call(connection.rollback)
             test_client.portal.call(connection.close)
         test_client.portal.call(engine.dispose)
+
+
+@pytest.fixture
+async def db_session(test_settings: Settings) -> AsyncIterator[AsyncSession]:
+    """A session on the test database for testing models directly (no HTTP).
+
+    Everything happens inside one transaction that is rolled back at the end.
+    Use it in tests marked with @pytest.mark.anyio.
+    """
+    engine = create_async_engine(test_settings.test_database_url, poolclass=NullPool)
+    async with engine.connect() as connection:
+        transaction = await connection.begin()
+        session = AsyncSession(
+            bind=connection,
+            join_transaction_mode="create_savepoint",
+            expire_on_commit=False,
+        )
+        try:
+            yield session
+        finally:
+            await session.close()
+            await transaction.rollback()
+    await engine.dispose()
 
 
 @pytest.fixture
