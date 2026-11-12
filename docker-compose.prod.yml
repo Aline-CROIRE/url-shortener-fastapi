@@ -1,5 +1,6 @@
 # PRODUCTION-like run: the image's default CMD (Gunicorn + Uvicorn workers), no code mount
-# Run: docker compose -f docker-compose.prod.yml up --build
+# Run: set POSTGRES_PASSWORD first (e.g. in a .env file), then
+#      docker compose -f docker-compose.prod.yml up --build
 services:
   app:
     build: .
@@ -11,10 +12,29 @@ services:
       WORKERS: ${WORKERS:-4}
       STORAGE_BACKEND: redis
       REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-url_shortener}
       BASE_URL: ${BASE_URL:-http://localhost:8000}
     depends_on:
       redis:
         condition: service_healthy
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD} # never hard-code in production
+      POSTGRES_DB: ${POSTGRES_DB:-url_shortener}
+    # No "ports": only the app can reach the database, inside the Docker network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
     restart: unless-stopped
 
   redis:
@@ -30,3 +50,4 @@ services:
 
 volumes:
   redis-data:
+  postgres-data:

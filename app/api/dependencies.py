@@ -1,8 +1,10 @@
 from typing import Annotated
 
 from fastapi import Depends, Request
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
+from app.db.database import get_db
 from app.services.url_shortener import UrlShortenerService
 from app.storage.base import UrlRepository
 
@@ -25,3 +27,6 @@ def get_url_service(
 
 # Short alias so endpoints can write: service: UrlServiceDep
 UrlServiceDep = Annotated[UrlShortenerService, Depends(get_url_service)]
+
+# Short alias so endpoints can write: db: DbSession
+DbSession = Annotated[AsyncSession, Depends(get_db)]

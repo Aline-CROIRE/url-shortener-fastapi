@@ -11,6 +11,7 @@ from app.core.config import Settings, get_settings
 from app.core.error_handlers import register_exception_handlers
 from app.core.logging import setup_logging
 from app.core.middleware import RequestLoggingMiddleware
+from app.db.database import create_engine, create_session_factory
 from app.storage.memory import InMemoryUrlRepository
 from app.storage.redis import RedisUrlRepository
 
@@ -47,11 +48,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             app.state.repository = InMemoryUrlRepository()
         app.state.redis = redis_client
 
+        # One engine (connection pool) and one sessionmaker for the whole app
+        engine = create_engine(settings.database_url, echo=settings.db_echo)
+        app.state.engine = engine
+        app.state.session_factory = create_session_factory(engine)
+
         yield  # the app handles requests here
 
         # Shutdown: runs once, when the server stops
         if redis_client is not None:
             await redis_client.aclose()
+        await engine.dispose()  # close every pooled database connection
 
     app = FastAPI(
         title=settings.app_name,

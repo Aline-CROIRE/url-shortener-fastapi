@@ -1,4 +1,4 @@
-# Local DEVELOPMENT: app with hot reload + Redis
+# Local DEVELOPMENT: app with hot reload + Redis + PostgreSQL
 # Run: docker compose up --build
 services:
   app:
@@ -16,6 +16,7 @@ services:
       DEBUG: "true"
       STORAGE_BACKEND: redis
       REDIS_URL: redis://redis:6379/0 # "redis" = the service name below
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/url_shortener # "db" = service below
       BASE_URL: http://localhost:8000
       # Windows/macOS do not send file-change events into containers; poll instead
       WATCHFILES_FORCE_POLLING: "true"
@@ -24,6 +25,26 @@ services:
     depends_on:
       redis:
         condition: service_healthy # wait until Redis answers PING
+      db:
+        condition: service_healthy # wait until Postgres accepts connections
+
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres # local development only
+      POSTGRES_DB: url_shortener
+    ports:
+      - "127.0.0.1:5432:5432" # only this computer can connect (used by tests and local runs)
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d url_shortener"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    volumes:
+      - postgres-data:/var/lib/postgresql/data # keep data when the container is recreated
+      # Scripts in this folder run on the very first start: creates the test database
+      - ./docker/postgres:/docker-entrypoint-initdb.d:ro
 
   redis:
     image: redis:8-alpine
@@ -39,3 +60,4 @@ services:
 
 volumes:
   redis-data:
+  postgres-data:
