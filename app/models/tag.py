@@ -33,6 +33,7 @@ class Tag(TimestampMixin, Base):
     urls: Mapped[list["URL"]] = relationship(
         secondary=url_tags,
         back_populates="tags",
+        lazy="raise",  # never loaded behind our back (see F3.1)
         # Deleting a tag removes only its url_tags rows (Postgres CASCADE),
         # never the URLs. No ORM cascade: tags and URLs live independently.
         passive_deletes=True,

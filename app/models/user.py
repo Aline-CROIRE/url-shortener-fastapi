@@ -41,6 +41,7 @@ class User(TimestampMixin, Base):
 
     urls: Mapped[list["URL"]] = relationship(
         back_populates="owner",
+        lazy="raise",  # never loaded behind our back (see F3.1)
         # Deleting a user through the ORM also deletes their URLs...
         cascade="all, delete-orphan",
         # ...but let Postgres do it (ondelete="CASCADE"): one DELETE instead of

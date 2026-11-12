@@ -10,6 +10,13 @@ from app.models import URL, Tag
 
 MAX_LIMIT = 100
 
+# What URLRead needs, loaded together with the URLs (relationships are lazy="raise"):
+#   owner: many-to-one  -> joinedload   (JOIN in the same query: adds columns, not rows)
+#   tags:  many-to-many -> selectinload (ONE extra query "... WHERE url_id IN (...)";
+#                          a JOIN would repeat each URL once per tag)
+# = 2 queries for any number of URLs, never 1 + N.
+WITH_OWNER_AND_TAGS = (joinedload(URL.owner), selectinload(URL.tags))
+
 # Where the previous page ended: (value of the sort column, id)
 CursorPosition = tuple[datetime | int, int]
 
@@ -118,9 +125,7 @@ class URLRepository:
             after_value, after_id = after
             statement = statement.where(tuple_(column, URL.id) < tuple_(after_value, after_id))
 
-        return statement.order_by(column.desc(), URL.id.desc()).options(
-            joinedload(URL.owner), selectinload(URL.tags)  # needed by URLRead (see F3.1)
-        )
+        return statement.order_by(column.desc(), URL.id.desc()).options(*WITH_OWNER_AND_TAGS)
 
     # ---------- running statements ----------
 
@@ -149,7 +154,7 @@ class URLRepository:
                 URL.owner_id == owner_id,
                 URL.deleted_at.is_(None),
             )
-            .options(joinedload(URL.owner), selectinload(URL.tags))
+            .options(*WITH_OWNER_AND_TAGS)
         )
 
     async def owned_url_id(self, short_code: str, owner_id: int) -> int | None:
