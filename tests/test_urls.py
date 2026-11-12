@@ -102,7 +102,7 @@ def test_redirect_unknown_code_returns_404(client: TestClient) -> None:
 
 def test_badly_formed_code_returns_422(client: TestClient) -> None:
     # Wrong length or characters: rejected before any storage lookup
-    for path in ("/abc", "/api/v1/urls/abc", "/toolong12", "/bad-cod"):
+    for path in ("/ab", "/api/v1/urls/ab", "/elevenchars", "/bad!code"):
         response = client.get(path)
         assert response.status_code == 422, path
         assert_error_shape(response.json(), "validation_error")

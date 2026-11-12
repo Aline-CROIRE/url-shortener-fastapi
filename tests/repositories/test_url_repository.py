@@ -49,8 +49,12 @@ async def test_active_and_expired_rules(
 ) -> None:
     url = await make_url(is_active=is_active, expires_at=expires_at)
 
+    # SQL side (the hybrid used in a WHERE)
     assert (url.short_code in await codes(repo, repo.active_urls(now=NOW))) is active
     assert (url.short_code in await codes(repo, repo.expired_urls(now=NOW))) is expired
+    # Python side (the same hybrid on the loaded object) gives the same answer
+    assert url.is_live(NOW) is active
+    assert url.is_expired(NOW) is expired
 
 
 @pytest.mark.anyio
