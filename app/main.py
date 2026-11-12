@@ -3,9 +3,11 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from redis.asyncio import Redis
 
 from app.api.router import router
 from app.api.routes import health, redirect
+from app.cache import NullRedirectCache, RedirectCache, RedisRedirectCache
 from app.core.config import Settings, get_settings
 from app.core.error_handlers import register_exception_handlers
 from app.core.logging import setup_logging
@@ -20,7 +22,7 @@ OPENAPI_TAGS = [
     {"name": "URLs", "description": "Create and look up short URLs."},
     {"name": "Analytics", "description": "Click statistics, computed in SQL."},
     {"name": "Redirect", "description": "Open a short link."},
-    {"name": "Health", "description": "App and database status."},
+    {"name": "Health", "description": "App, database and cache status."},
 ]
 
 
@@ -36,9 +38,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.engine = engine
         app.state.session_factory = create_session_factory(engine)
 
+        # Redirect cache: Redis if REDIS_URL is set, otherwise a cache that does nothing
+        redis_client: Redis | None = None
+        cache: RedirectCache = NullRedirectCache()
+        if settings.redis_url:
+            redis_client = Redis.from_url(
+                settings.redis_url,
+                decode_responses=True,
+                # short timeouts: a slow or dead Redis must not slow redirects down
+                socket_connect_timeout=0.5,
+                socket_timeout=0.5,
+            )
+            cache = RedisRedirectCache(redis_client, settings.cache_ttl_seconds)
+        app.state.redirect_cache = cache
+
         yield  # the app handles requests here
 
         # Shutdown: runs once, when the server stops
+        if redis_client is not None:
+            await redis_client.aclose()
         await engine.dispose()  # close every pooled database connection
 
     app = FastAPI(

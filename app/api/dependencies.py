@@ -3,6 +3,7 @@ from typing import Annotated
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.cache import RedirectCache
 from app.core.config import Settings
 from app.db.database import get_db
 from app.repositories import ClickRepository, TagRepository, URLRepository, UserRepository
@@ -17,6 +18,14 @@ def get_settings_from_app(request: Request) -> Settings:
 
 # Short alias so endpoints can write: db: DbSession
 DbSession = Annotated[AsyncSession, Depends(get_db)]
+
+
+def get_redirect_cache(request: Request) -> RedirectCache:
+    # Created once in the app lifespan (Redis, or a no-op cache without REDIS_URL)
+    return request.app.state.redirect_cache
+
+
+RedirectCacheDep = Annotated[RedirectCache, Depends(get_redirect_cache)]
 
 
 # ---------- database repositories (one per request, sharing its session) ----------
@@ -48,18 +57,22 @@ TagRepoDep = Annotated[TagRepository, Depends(get_tag_repository)]
 
 
 def get_redirect_service(
-    db: DbSession, urls: URLRepoDep, clicks: ClickRepoDep
+    db: DbSession, urls: URLRepoDep, clicks: ClickRepoDep, cache: RedirectCacheDep
 ) -> RedirectService:
-    return RedirectService(session=db, urls=urls, clicks=clicks)
+    return RedirectService(session=db, urls=urls, clicks=clicks, cache=cache)
 
 
 RedirectServiceDep = Annotated[RedirectService, Depends(get_redirect_service)]
 
 
 def get_url_service(
-    db: DbSession, urls: URLRepoDep, users: UserRepoDep, tags: TagRepoDep
+    db: DbSession,
+    urls: URLRepoDep,
+    users: UserRepoDep,
+    tags: TagRepoDep,
+    cache: RedirectCacheDep,
 ) -> URLService:
-    return URLService(session=db, urls=urls, users=users, tags=tags)
+    return URLService(session=db, urls=urls, users=users, tags=tags, cache=cache)
 
 
 URLServiceDep = Annotated[URLService, Depends(get_url_service)]
