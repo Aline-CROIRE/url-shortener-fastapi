@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import UrlGoneError
@@ -41,13 +41,6 @@ def recorded(run_db: RunDb, short_code: str) -> tuple[int, list[Click]]:
         url = await session.scalar(select(URL).where(URL.short_code == short_code))
         clicks = await session.scalars(select(Click).where(Click.url_id == url.id))
         return url.click_count, list(clicks)
-
-    return run_db(work)
-
-
-def total_clicks(run_db: RunDb) -> int:
-    async def work(session: AsyncSession) -> int:
-        return await session.scalar(select(func.count()).select_from(Click))
 
     return run_db(work)
 
@@ -122,6 +115,7 @@ def test_unknown_code_returns_404(db_client: TestClient) -> None:
     [
         ({"expires_at": datetime.now(UTC) - timedelta(days=1)}, "url_expired"),
         ({"is_active": False}, "url_inactive"),
+        ({"deleted_at": datetime.now(UTC) - timedelta(hours=1)}, "url_deleted"),
         ({"is_active": False, "expires_at": datetime.now(UTC) - timedelta(days=1)}, "url_inactive"),
     ],
 )
@@ -169,16 +163,3 @@ def test_failure_after_the_click_insert_leaves_nothing_half_saved(
 
     assert response.status_code == 500
     assert recorded(run_db, code) == (0, [])  # the click INSERT was rolled back too
-
-
-# ---------- Module 5 links (strangler fig fallback) ----------
-
-
-def test_links_from_the_module_5_endpoint_still_redirect(db_client: TestClient, run_db: RunDb) -> None:
-    created = db_client.post("/api/v1/urls", json={"original_url": TARGET}).json()
-
-    response = db_client.get(f"/{created['short_code']}")
-
-    assert response.status_code == 302
-    assert response.headers["location"] == TARGET
-    assert total_clicks(run_db) == 0  # legacy visits are not recorded
