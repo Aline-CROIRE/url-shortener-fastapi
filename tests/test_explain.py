@@ -10,10 +10,13 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
+import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.scripts.explain import ExplainedQuery, explain_report
+from app.core.config import Settings
+from app.scripts import explain as explain_module
+from app.scripts.explain import NO_DATA_MESSAGE, ExplainedQuery, explain_report, print_report
 from app.scripts.seed import SeedCounts, seed_database
 
 RunDb = Callable[..., Any]
@@ -68,3 +71,29 @@ def test_explained_query_reads_index_names_and_seq_scans() -> None:
 
     assert item.indexes_used == ["ix_a", "ix_b"]
     assert item.sequential_scans == ["users"]
+
+
+# ---------- the command line ----------
+
+
+def test_command_line_on_an_empty_database_explains_what_to_do(
+    test_settings: Settings, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    monkeypatch.setattr(explain_module, "get_settings", lambda: test_settings)
+
+    explain_module.main()  # this used to crash with NoResultFound (bug fixed in F3.3)
+
+    assert NO_DATA_MESSAGE in capsys.readouterr().out
+
+
+def test_print_report_shows_plans_and_a_summary(capsys: pytest.CaptureFixture) -> None:
+    print_report(
+        [
+            ExplainedQuery("Fast lookup", ["Index Scan using ix_urls_short_code on urls"]),
+            ExplainedQuery("Slow search", ["Seq Scan on urls"]),
+        ]
+    )
+
+    out = capsys.readouterr().out
+    assert "Fast lookup" in out and "--> indexes used: ix_urls_short_code" in out
+    assert "SEQ SCAN on: urls" in out

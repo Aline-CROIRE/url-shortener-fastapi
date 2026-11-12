@@ -9,12 +9,13 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.api.owner import DEMO_OWNER_EMAIL
 from app.models import URL, Click, Tag, User
-from app.repositories import URLRepository
+from app.repositories import TagRepository, URLRepository
 from app.services import urls as url_service_module
 
 RANDOM_CODE = re.compile(r"^[A-Za-z0-9]{7}$")
@@ -348,3 +349,41 @@ def test_demo_owner_is_created_once_and_cached(
 
     assert isinstance(first_id, int)
     assert app.state.demo_owner_id == first_id  # cached: not looked up again
+
+
+# ---------- coverage gaps (F3.3) ----------
+
+
+def test_put_with_nothing_changes_nothing(db_client: TestClient, owner_id: int) -> None:
+    created = create(db_client, tags=["Email"])
+
+    response = db_client.put(f"{API}/{created['short_code']}", json={})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["updated_at"] == created["updated_at"]  # no UPDATE was sent
+    assert [tag["name"] for tag in body["tags"]] == ["Email"]
+
+
+def test_other_unique_violations_during_create_are_not_called_alias_taken(
+    db_client: TestClient, owner_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Pretend the tag step hit a unique violation that has nothing to do with the code
+    class UniqueViolation(Exception):
+        sqlstate = "23505"
+
+    cause = Exception()
+    cause.constraint_name = "uq_tags_name"
+    original = UniqueViolation()
+    original.__cause__ = cause
+
+    async def clashing_tags(self: Any, names: list[str]) -> list[Tag]:
+        raise IntegrityError("INSERT INTO tags ...", {}, original)
+
+    monkeypatch.setattr(TagRepository, "get_or_create_many", clashing_tags)
+
+    response = db_client.post(API, json={"original_url": TARGET, "custom_alias": "fine1", "tags": ["X"]})
+
+    assert response.status_code == 409
+    assert error_code(response) == "conflict"  # the generic 409, NOT "alias_taken"
+    assert response.json()["error"]["details"] == {"constraint": "uq_tags_name"}

@@ -1,6 +1,8 @@
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import DateTime, text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import DbSession
 from app.db.base import Base, TimestampMixin
@@ -79,3 +81,27 @@ def test_timestamp_mixin_adds_id_created_at_updated_at() -> None:
 
     # Clean up: remove the probe table from the shared metadata catalogue
     Base.metadata.remove(Probe.__table__)
+
+
+def test_get_db_rolls_back_when_the_request_fails(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The REAL get_db (no override): a crash after using the session must roll back
+    rollbacks: list[AsyncSession] = []
+    original_rollback = AsyncSession.rollback
+
+    async def spy_rollback(self: AsyncSession) -> None:
+        rollbacks.append(self)
+        await original_rollback(self)
+
+    monkeypatch.setattr(AsyncSession, "rollback", spy_rollback)
+
+    @client.app.get("/_test/crash")
+    async def crash(db: DbSession) -> None:
+        await db.execute(text("SELECT 1"))
+        raise RuntimeError("something broke halfway")
+
+    response = client.get("/_test/crash")
+
+    assert response.status_code == 500
+    assert len(rollbacks) == 1  # get_db's "except: rollback" ran
