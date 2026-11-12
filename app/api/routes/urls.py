@@ -1,14 +1,22 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Body, Response, status
+from fastapi import APIRouter, Body, Query, Response, status
 
 from app.api.dependencies import SettingsDep, URLServiceDep
 from app.api.owner import CurrentOwnerId
 from app.api.params import ShortCodePath
-from app.api.responses import CONFLICT, INTERNAL_ERROR, NOT_FOUND, VALIDATION_ERROR
+from app.api.responses import (
+    CONFLICT,
+    INTERNAL_ERROR,
+    INVALID_CURSOR,
+    NOT_FOUND,
+    VALIDATION_ERROR,
+)
 from app.core.config import Settings
 from app.models import URL
-from app.schemas.url import URLCreate, URLRead, URLUpdate
+from app.models.tag import TAG_NAME_MAX_LENGTH
+from app.repositories.url import MAX_LIMIT, URLFilters, URLSort
+from app.schemas.url import URLCreate, URLPage, URLRead, URLUpdate
 
 router = APIRouter(prefix="/urls", tags=["URLs"])
 
@@ -54,6 +62,36 @@ async def create_url(
 ) -> URLRead:
     url = await service.create(payload, owner_id)
     return to_url_read(url, settings)
+
+
+@router.get(
+    "",
+    summary="List your short URLs",
+    description=(
+        "Keyset (cursor) pagination: pass `next_cursor` from one page as `cursor` to get "
+        "the next. Filters are combined with AND and only applied when given."
+    ),
+    responses={**INVALID_CURSOR, **VALIDATION_ERROR, **INTERNAL_ERROR},
+)
+async def list_urls(
+    service: URLServiceDep,
+    owner_id: CurrentOwnerId,
+    settings: SettingsDep,
+    limit: Annotated[int, Query(ge=1, le=MAX_LIMIT, description="Page size")] = 20,
+    cursor: Annotated[str | None, Query(description="next_cursor from the previous page")] = None,
+    sort: Annotated[URLSort, Query(description="newest or most_clicked")] = URLSort.NEWEST,
+    tag: Annotated[
+        str | None, Query(min_length=1, max_length=TAG_NAME_MAX_LENGTH, description="Tag name (any case)")
+    ] = None,
+    is_active: Annotated[bool | None, Query(description="Only switched on (true) or off (false)")] = None,
+    expired: Annotated[bool | None, Query(description="Only expired (true) or not expired (false)")] = None,
+    search: Annotated[
+        str | None, Query(min_length=1, max_length=200, description="Text in the URL or title")
+    ] = None,
+) -> URLPage:
+    filters = URLFilters(tag=tag, is_active=is_active, expired=expired, search=search)
+    urls, next_cursor = await service.list_page(owner_id, filters, sort, limit, cursor)
+    return URLPage(items=[to_url_read(url, settings) for url in urls], next_cursor=next_cursor)
 
 
 @router.get(
