@@ -5,7 +5,7 @@ from fastapi import APIRouter, Body, status
 from app.api.dependencies import UrlServiceDep
 from app.api.params import ShortCodePath
 from app.api.responses import INTERNAL_ERROR, NOT_FOUND, STORAGE_UNAVAILABLE, VALIDATION_ERROR
-from app.schemas.url import URLCreate, URLRead
+from app.schemas.url import LegacyURLCreate, LegacyURLRead
 from app.services.url_shortener import UrlShortenerService
 from app.storage.base import UrlRecord
 
@@ -23,8 +23,8 @@ CREATE_EXAMPLES = {
 }
 
 
-def to_url_read(record: UrlRecord, service: UrlShortenerService) -> URLRead:
-    return URLRead(
+def to_url_read(record: UrlRecord, service: UrlShortenerService) -> LegacyURLRead:
+    return LegacyURLRead(
         short_code=record.short_code,
         original_url=record.original_url,
         short_url=service.build_short_url(record.short_code),
@@ -40,9 +40,9 @@ def to_url_read(record: UrlRecord, service: UrlShortenerService) -> URLRead:
     responses={**VALIDATION_ERROR, **INTERNAL_ERROR, **STORAGE_UNAVAILABLE},
 )
 async def create_short_url(
-    payload: Annotated[URLCreate, Body(openapi_examples=CREATE_EXAMPLES)],
+    payload: Annotated[LegacyURLCreate, Body(openapi_examples=CREATE_EXAMPLES)],
     service: UrlServiceDep,
-) -> URLRead:
+) -> LegacyURLRead:
     record = await service.create_short_url(str(payload.original_url))
     return to_url_read(record, service)
 
@@ -54,6 +54,6 @@ async def create_short_url(
     response_description="Details",
     responses={**NOT_FOUND, **VALIDATION_ERROR, **INTERNAL_ERROR, **STORAGE_UNAVAILABLE},
 )
-async def get_short_url(short_code: ShortCodePath, service: UrlServiceDep) -> URLRead:
+async def get_short_url(short_code: ShortCodePath, service: UrlServiceDep) -> LegacyURLRead:
     record = await service.get_url(short_code)  # raises UrlNotFoundError -> 404
     return to_url_read(record, service)
