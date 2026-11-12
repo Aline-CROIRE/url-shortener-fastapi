@@ -23,6 +23,11 @@ class Base(DeclarativeBase):
 class TimestampMixin:
     """Adds id, created_at and updated_at to any model that inherits it."""
 
+    # After INSERT and UPDATE, read the values Postgres filled in (created_at,
+    # updated_at) back with RETURNING. Without it, touching url.updated_at after
+    # an UPDATE would need a hidden reload, which async code cannot do.
+    __mapper_args__ = {"eager_defaults": True}
+
     id: Mapped[int] = mapped_column(primary_key=True)
     # server_default: Postgres fills the time itself when the row is inserted
     created_at: Mapped[datetime] = mapped_column(

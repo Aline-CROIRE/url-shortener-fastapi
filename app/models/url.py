@@ -54,6 +54,8 @@ class URL(TimestampMixin, Base):
     )
     is_active: Mapped[bool] = mapped_column(default=True, server_default=true())
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Soft delete: the row stays (its short code is never reused, its clicks are kept)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # Filled by the URL preview service in Module 9
     title: Mapped[str | None] = mapped_column(String(255))
@@ -92,12 +94,16 @@ class URL(TimestampMixin, Base):
 
     @hybrid_method
     def is_live(self, now: datetime) -> bool:
-        """Switched on and not expired: the link may redirect."""
-        return self.is_active and not self.is_expired(now)
+        """Not deleted, switched on and not expired: the link may redirect."""
+        return self.deleted_at is None and self.is_active and not self.is_expired(now)
 
     @is_live.expression
     def is_live(cls, now: datetime) -> ColumnElement[bool]:
-        return and_(cls.is_active.is_(True), or_(cls.expires_at.is_(None), cls.expires_at > now))
+        return and_(
+            cls.deleted_at.is_(None),
+            cls.is_active.is_(True),
+            or_(cls.expires_at.is_(None), cls.expires_at > now),
+        )
 
     def __repr__(self) -> str:
         return f"<URL id={self.id} short_code={self.short_code!r} owner_id={self.owner_id}>"
