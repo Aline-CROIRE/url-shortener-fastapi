@@ -45,6 +45,7 @@ def test_settings() -> Settings:
     settings = Settings(
         environment="testing",
         base_url=TEST_BASE_URL,
+        redis_url="",  # no real Redis in tests (cache tests use a fake one)
         debug=False,
     )
     # The app itself must also point at the test database, never the real one
