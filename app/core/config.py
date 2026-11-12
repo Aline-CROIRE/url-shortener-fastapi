@@ -15,9 +15,6 @@ class Settings(BaseSettings):
     environment: Literal["development", "production", "testing"] = "development"
     debug: bool = False
     base_url: str = "http://localhost:8000"
-    redis_url: str = "redis://127.0.0.1:6379/0"
-    # "memory" = Python dict (no setup needed), "redis" = Redis server at redis_url
-    storage_backend: Literal["memory", "redis"] = "memory"
     # PostgreSQL address: postgresql+asyncpg://<user>:<password>@<host>:<port>/<database>
     database_url: str = "postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/url_shortener"
     # A separate database used only by pytest, so tests never touch real data

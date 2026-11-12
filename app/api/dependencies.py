@@ -7,8 +7,7 @@ from app.core.config import Settings
 from app.db.database import get_db
 from app.repositories import ClickRepository, TagRepository, URLRepository, UserRepository
 from app.services.redirect import RedirectService
-from app.services.url_shortener import UrlShortenerService
-from app.storage.base import UrlRepository
+from app.services.urls import URLService
 
 
 def get_settings_from_app(request: Request) -> Settings:
@@ -56,21 +55,11 @@ def get_redirect_service(
 RedirectServiceDep = Annotated[RedirectService, Depends(get_redirect_service)]
 
 
-# ---------- Module 5 storage (memory/Redis), still used by the URL routes ----------
-# TODO(F2.3): remove when the URL routes switch to the database repositories.
-
-
-def get_repository(request: Request) -> UrlRepository:
-    # Created once in create_app and shared by every request
-    return request.app.state.repository
-
-
 def get_url_service(
-    repository: Annotated[UrlRepository, Depends(get_repository)],
-    settings: Annotated[Settings, Depends(get_settings_from_app)],
-) -> UrlShortenerService:
-    return UrlShortenerService(repository=repository, base_url=settings.base_url)
+    db: DbSession, urls: URLRepoDep, users: UserRepoDep, tags: TagRepoDep
+) -> URLService:
+    return URLService(session=db, urls=urls, users=users, tags=tags)
 
 
-# Short alias so endpoints can write: service: UrlServiceDep
-UrlServiceDep = Annotated[UrlShortenerService, Depends(get_url_service)]
+URLServiceDep = Annotated[URLService, Depends(get_url_service)]
+SettingsDep = Annotated[Settings, Depends(get_settings_from_app)]

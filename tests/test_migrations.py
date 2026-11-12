@@ -20,6 +20,10 @@ from app.db.base import Base
 from tests.conftest import alembic_config
 
 DEFAULT_TAGS = {"Marketing", "Social", "Email", "Ads", "Events", "Personal"}
+# Revisions are named explicitly: a relative "-1" means "undo the NEWEST migration",
+# which silently changes meaning every time a new migration is added.
+SEED_TAGS_REVISION = "5de473cbc932"
+BEFORE_SEED_REVISION = "f113c0993510"
 
 
 async def run_query(database_url: str, sql: str) -> set[Any]:
@@ -46,11 +50,12 @@ def test_downgrade_to_base_removes_everything_and_upgrade_rebuilds() -> None:
     url = get_settings().test_database_url
     config = alembic_config(url)
 
-    command.downgrade(config, "base")  # undo every migration
-    assert tables(url) == {"alembic_version"}  # only the "sign on the door" is left
-    assert enum_types(url) == set()  # no forgotten ENUM types
-
-    command.upgrade(config, "head")  # build everything again
+    try:
+        command.downgrade(config, "base")  # undo every migration
+        assert tables(url) == {"alembic_version"}  # only the "sign on the door" is left
+        assert enum_types(url) == set()  # no forgotten ENUM types
+    finally:
+        command.upgrade(config, "head")  # ALWAYS rebuild, even if an assert failed
     assert {"users", "urls", "clicks", "tags", "url_tags"} <= tables(url)
     assert "user_tier" in enum_types(url)
 
@@ -60,11 +65,12 @@ def test_seed_migration_adds_default_tags_and_downgrade_removes_them() -> None:
     config = alembic_config(url)
     assert DEFAULT_TAGS <= tag_names(url)  # at head: seeded
 
-    command.downgrade(config, "-1")  # undo only the data migration
-    assert tag_names(url).isdisjoint(DEFAULT_TAGS)  # removed
-    assert "tags" in tables(url)  # ...but the table itself is still there
-
-    command.upgrade(config, "head")
+    try:
+        command.downgrade(config, BEFORE_SEED_REVISION)  # undo the seed (and anything newer)
+        assert tag_names(url).isdisjoint(DEFAULT_TAGS)  # removed
+        assert "tags" in tables(url)  # ...but the table itself is still there
+    finally:
+        command.upgrade(config, "head")
     assert DEFAULT_TAGS <= tag_names(url)  # back again
 
 

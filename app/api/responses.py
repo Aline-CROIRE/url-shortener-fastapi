@@ -64,10 +64,3 @@ INTERNAL_ERROR: dict[int | str, dict[str, Any]] = {
         "An unexpected error occurred.",
     ),
 }
-STORAGE_UNAVAILABLE: dict[int | str, dict[str, Any]] = {
-    status.HTTP_503_SERVICE_UNAVAILABLE: _error_doc(
-        "Redis is down",
-        "storage_unavailable",
-        "The storage service is temporarily unavailable. Please try again later.",
-    ),
-}

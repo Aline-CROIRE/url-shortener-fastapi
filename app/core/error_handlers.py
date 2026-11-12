@@ -9,8 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.core.exceptions import AppError, ConflictError
-
-UNIQUE_VIOLATION = "23505"  # PostgreSQL error code (SQLSTATE) for a duplicate unique value
+from app.db.errors import unique_violation_constraint
 
 logger = logging.getLogger(__name__)
 
@@ -63,10 +62,10 @@ async def validation_exception_handler(
 
 async def integrity_error_handler(request: Request, exc: IntegrityError) -> JSONResponse:
     """Duplicate unique value -> clean 409. Any other constraint error is a bug -> 500."""
-    if getattr(exc.orig, "sqlstate", None) != UNIQUE_VIOLATION:
-        return await unhandled_exception_handler(request, exc)
     # Thanks to our naming convention the name is readable, e.g. "uq_users_email"
-    constraint = getattr(exc.orig.__cause__, "constraint_name", None)
+    constraint = unique_violation_constraint(exc)
+    if constraint is None:
+        return await unhandled_exception_handler(request, exc)
     conflict = ConflictError(details={"constraint": constraint})
     return await app_error_handler(request, conflict)
 

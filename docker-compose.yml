@@ -1,4 +1,4 @@
-# Local DEVELOPMENT: app with hot reload + Redis + PostgreSQL
+# Local DEVELOPMENT: app with hot reload + PostgreSQL
 # Run: docker compose up --build
 services:
   app:
@@ -14,8 +14,6 @@ services:
       # These win over values from .env
       ENVIRONMENT: development
       DEBUG: "true"
-      STORAGE_BACKEND: redis
-      REDIS_URL: redis://redis:6379/0 # "redis" = the service name below
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/url_shortener # "db" = service below
       BASE_URL: http://localhost:8000
       # Windows/macOS do not send file-change events into containers; poll instead
@@ -23,8 +21,6 @@ services:
     volumes:
       - ./app:/app/app # your code, live inside the container
     depends_on:
-      redis:
-        condition: service_healthy # wait until Redis answers PING
       migrate:
         condition: service_completed_successfully # start only after the schema is up to date
 
@@ -60,18 +56,5 @@ services:
       # Scripts in this folder run on the very first start: creates the test database
       - ./docker/postgres:/docker-entrypoint-initdb.d:ro
 
-  redis:
-    image: redis:8-alpine
-    ports:
-      - "127.0.0.1:6379:6379" # only this computer can connect (used by integration tests)
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-    volumes:
-      - redis-data:/data # keep data when the container is recreated
-
 volumes:
-  redis-data:
   postgres-data:

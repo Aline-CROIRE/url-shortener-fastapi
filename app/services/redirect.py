@@ -43,6 +43,8 @@ class RedirectService:
             url = await self._urls.get_by_short_code(short_code)
             if url is None:
                 raise UrlNotFoundError(short_code)
+            if url.deleted_at is not None:
+                raise UrlGoneError(short_code, "deleted")
             if not url.is_active:
                 raise UrlGoneError(short_code, "inactive")
             if url.is_expired(now):

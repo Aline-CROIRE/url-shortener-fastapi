@@ -10,9 +10,11 @@ from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from app.api.owner import get_current_owner_id
 from app.core.config import Settings, get_settings
 from app.db.database import get_db
 from app.main import create_app
+from app.models import User
 
 TEST_BASE_URL = "http://short.test/"  # trailing slash on purpose: it must be removed
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -37,11 +39,9 @@ def migrated_test_database() -> None:
 
 @pytest.fixture
 def test_settings() -> Settings:
-    # Values passed here win over .env and environment variables,
-    # so tests always use in-memory storage and never need Redis.
+    # Values passed here win over .env and environment variables
     settings = Settings(
         environment="testing",
-        storage_backend="memory",
         base_url=TEST_BASE_URL,
         debug=False,
     )
@@ -158,6 +158,24 @@ async def db_session(test_settings: Settings) -> AsyncIterator[AsyncSession]:
             await session.close()
             await transaction.rollback()
     await engine.dispose()
+
+
+@pytest.fixture
+def owner_id(app: FastAPI, run_db: Callable[..., Any]) -> int:
+    """Seed a user and make the app treat them as the current owner.
+
+    Replaces the temporary demo owner (and, in Module 7, the JWT user) in tests.
+    """
+
+    async def create_owner(session: AsyncSession) -> int:
+        user = User(email="me@example.com", username="me", hashed_password="h")
+        session.add(user)
+        await session.flush()
+        return user.id
+
+    user_id = run_db(create_owner)
+    app.dependency_overrides[get_current_owner_id] = lambda: user_id
+    return user_id
 
 
 @pytest.fixture

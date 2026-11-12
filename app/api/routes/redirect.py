@@ -1,11 +1,10 @@
 from fastapi import APIRouter, Request, status
 from fastapi.responses import RedirectResponse
 
-from app.api.dependencies import RedirectServiceDep, UrlServiceDep
+from app.api.dependencies import RedirectServiceDep
 from app.api.params import ShortCodePath
-from app.api.responses import GONE, INTERNAL_ERROR, NOT_FOUND, STORAGE_UNAVAILABLE, VALIDATION_ERROR
+from app.api.responses import GONE, INTERNAL_ERROR, NOT_FOUND, VALIDATION_ERROR
 from app.api.visitor import visitor_from_request
-from app.core.exceptions import UrlNotFoundError
 
 router = APIRouter(tags=["Redirect"])
 
@@ -35,21 +34,13 @@ router = APIRouter(tags=["Redirect"])
         **GONE,
         **VALIDATION_ERROR,
         **INTERNAL_ERROR,
-        **STORAGE_UNAVAILABLE,
     },
 )
 async def redirect_to_original(
     short_code: ShortCodePath,
     request: Request,
     service: RedirectServiceDep,
-    legacy: UrlServiceDep,
 ) -> RedirectResponse:
-    try:
-        target = await service.visit(short_code, visitor_from_request(request))
-    except UrlNotFoundError:
-        # TODO(F2.3): remove this fallback ("strangler fig"). Links created by the
-        # Module 5 POST endpoint still live in memory/Redis until F2.3 moves it to
-        # the database. Those visits are not recorded.
-        record = await legacy.get_url(short_code)  # raises UrlNotFoundError -> 404
-        target = record.original_url
+    # 404 unknown, 410 deleted/switched off/expired; otherwise the visit is recorded
+    target = await service.visit(short_code, visitor_from_request(request))
     return RedirectResponse(url=target, status_code=status.HTTP_302_FOUND)

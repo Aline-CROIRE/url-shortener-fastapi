@@ -140,40 +140,13 @@ class URLRead(ORMModel):
 
     @model_validator(mode="after")
     def build_short_url(self, info: ValidationInfo) -> Self:
+        if self.short_url:
+            # Already built: FastAPI validates the returned URLRead a second time
+            # (without our context) before sending it; keep the value we made.
+            return self
         # base_url is a setting, not a column, so the caller passes it in
         base_url = (info.context or {}).get("base_url")
         if not base_url:
             raise ValueError("URLRead needs context={'base_url': ...} to build short_url")
         self.short_url = f"{base_url.rstrip('/')}/{self.short_code}"
         return self
-
-
-# ---------- Module 5 schemas (still used by the memory/Redis routes) ----------
-# TODO(F2.3): remove these when the URL routes switch to the database.
-
-
-class LegacyURLCreate(BaseModel):
-    original_url: HttpUrl = Field(
-        description="Long URL (http or https)",
-        examples=["https://www.python.org/about/"],
-    )
-
-
-class LegacyURLRead(BaseModel):
-    model_config = ConfigDict(
-        json_schema_extra={
-            "examples": [
-                {
-                    "short_code": "aB3dE9x",
-                    "original_url": "https://www.python.org/about/",
-                    "short_url": "http://localhost:8000/aB3dE9x",
-                    "created_at": "2026-11-04T10:15:30.123456Z",
-                }
-            ]
-        }
-    )
-
-    short_code: str = Field(description="7 letters or digits")
-    original_url: str = Field(description="Long URL")
-    short_url: str = Field(description="Link to share")
-    created_at: datetime = Field(description="Creation time (UTC)")
