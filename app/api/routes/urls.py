@@ -2,7 +2,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Body, Query, Response, status
 
-from app.api.dependencies import SettingsDep, URLServiceDep
+from app.api.dependencies import SettingsDep, URLReadServiceDep, URLServiceDep
 from app.api.owner import CurrentOwnerId
 from app.api.params import ShortCodePath
 from app.api.responses import (
@@ -74,7 +74,7 @@ async def create_url(
     responses={**INVALID_CURSOR, **VALIDATION_ERROR, **INTERNAL_ERROR},
 )
 async def list_urls(
-    service: URLServiceDep,
+    service: URLReadServiceDep,  # read side (replica)
     owner_id: CurrentOwnerId,
     settings: SettingsDep,
     limit: Annotated[int, Query(ge=1, le=MAX_LIMIT, description="Page size")] = 20,
@@ -102,7 +102,7 @@ async def list_urls(
 )
 async def get_url(
     short_code: ShortCodePath,
-    service: URLServiceDep,
+    service: URLReadServiceDep,  # read side (replica)
     owner_id: CurrentOwnerId,
     settings: SettingsDep,
 ) -> URLRead:

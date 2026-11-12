@@ -16,6 +16,8 @@ services:
       DEBUG: "true"
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/url_shortener # "db" = service below
       REDIS_URL: redis://redis:6379/0 # "redis" = the service name below
+      # Reads go to the replica when set (start it with: --profile replica). Empty = primary.
+      DATABASE_REPLICA_URL: ${DATABASE_REPLICA_URL:-}
       BASE_URL: http://localhost:8000
       # Windows/macOS do not send file-change events into containers; poll instead
       WATCHFILES_FORCE_POLLING: "true"
@@ -40,6 +42,29 @@ services:
     depends_on:
       db:
         condition: service_healthy # wait until Postgres accepts connections
+
+  # Optional READ-ONLY copy of "db" (streaming replication). Not started by default:
+  #   docker compose --profile replica up -d db-replica
+  # Needs replication enabled on the primary (docker/postgres/enable-replication.sh).
+  db-replica:
+    image: postgres:17-alpine
+    profiles: ["replica"]
+    entrypoint: ["sh", "/start-replica.sh"]
+    environment:
+      PGDATA: /var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5434:5432" # 5434: 5432 is the primary, 5433 is used by another project
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d url_shortener"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - postgres-replica-data:/var/lib/postgresql/data
+      - ./docker/postgres-replica/start-replica.sh:/start-replica.sh:ro
+    depends_on:
+      db:
+        condition: service_healthy
 
   redis:
     image: redis:8-alpine
@@ -72,3 +97,4 @@ services:
 
 volumes:
   postgres-data:
+  postgres-replica-data:

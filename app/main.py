@@ -12,7 +12,7 @@ from app.core.config import Settings, get_settings
 from app.core.error_handlers import register_exception_handlers
 from app.core.logging import setup_logging
 from app.core.middleware import RequestLoggingMiddleware
-from app.db.database import create_engine, create_session_factory
+from app.db.database import create_engine, create_read_engine, create_session_factory
 
 logger = logging.getLogger(__name__)
 
@@ -33,10 +33,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # Startup: runs once, before the first request.
-        # One engine (connection pool) and one sessionmaker for the whole app
+        # WRITE side: one engine (connection pool) + sessionmaker on the primary
         engine = create_engine(settings.database_url, echo=settings.db_echo)
         app.state.engine = engine
         app.state.session_factory = create_session_factory(engine)
+        # READ side: the replica if DATABASE_REPLICA_URL is set, else the primary's
+        # pool; always read-only
+        read_engine = create_read_engine(engine, settings.database_replica_url, settings.db_echo)
+        app.state.read_engine = read_engine
+        app.state.read_session_factory = create_session_factory(read_engine)
 
         # Redirect cache: Redis if REDIS_URL is set, otherwise a cache that does nothing
         redis_client: Redis | None = None
@@ -57,6 +62,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Shutdown: runs once, when the server stops
         if redis_client is not None:
             await redis_client.aclose()
+        if settings.database_replica_url:
+            await read_engine.dispose()  # the replica's own pool
         await engine.dispose()  # close every pooled database connection
 
     app = FastAPI(
