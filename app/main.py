@@ -18,6 +18,7 @@ API_DESCRIPTION = 'Errors use one shape: `{"error": {"code", "message", "details
 
 OPENAPI_TAGS = [
     {"name": "URLs", "description": "Create and look up short URLs."},
+    {"name": "Analytics", "description": "Click statistics, computed in SQL."},
     {"name": "Redirect", "description": "Open a short link."},
     {"name": "Health", "description": "App and database status."},
 ]

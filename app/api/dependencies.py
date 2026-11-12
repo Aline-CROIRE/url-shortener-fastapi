@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings
 from app.db.database import get_db
 from app.repositories import ClickRepository, TagRepository, URLRepository, UserRepository
+from app.services.analytics import AnalyticsService
 from app.services.redirect import RedirectService
 from app.services.urls import URLService
 
@@ -63,3 +64,10 @@ def get_url_service(
 
 URLServiceDep = Annotated[URLService, Depends(get_url_service)]
 SettingsDep = Annotated[Settings, Depends(get_settings_from_app)]
+
+
+def get_analytics_service(urls: URLRepoDep, clicks: ClickRepoDep) -> AnalyticsService:
+    return AnalyticsService(urls=urls, clicks=clicks)
+
+
+AnalyticsServiceDep = Annotated[AnalyticsService, Depends(get_analytics_service)]

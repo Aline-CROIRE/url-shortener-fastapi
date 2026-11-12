@@ -16,7 +16,8 @@ class CountryCount(ORMModel):
 
 
 class CityCount(ORMModel):
-    city: str
+    city: str  # or "Unknown"
+    country: str  # the same city name can exist in different countries
     clicks: int
 
 
@@ -32,8 +33,11 @@ class ReferrerCount(ORMModel):
 
 class URLAnalytics(ORMModel):
     short_code: str
+    days: int  # size of the clicks_per_day window
     total_clicks: int
-    unique_visitors: int  # distinct IP addresses
+    # An estimate: distinct IP addresses (people behind one Wi-Fi share an IP,
+    # one phone can change IPs, clicks without an IP are not counted)
+    unique_visitors: int
     first_click_at: datetime | None  # None when the link was never clicked
     last_click_at: datetime | None
     clicks_per_country: list[CountryCount]
