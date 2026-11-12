@@ -13,7 +13,7 @@ from sqlalchemy.pool import NullPool
 
 from app.api.owner import get_current_owner_id
 from app.core.config import Settings, get_settings
-from app.db.database import get_db
+from app.db.database import get_db, get_read_db
 from app.db.query_counter import QueryCounter, count_queries
 from app.main import create_app
 from app.models import User
@@ -105,6 +105,9 @@ def db_client(
         return connection
 
     app.dependency_overrides[get_db] = override_get_db
+    # Reads use the SAME test transaction, so they see the data the test wrote
+    # (in production the read side may be a replica, a moment behind)
+    app.dependency_overrides[get_read_db] = override_get_db
 
     with TestClient(app, follow_redirects=False, raise_server_exceptions=False) as test_client:
         # Inside TestClient's event loop: every request of this test uses this connection
