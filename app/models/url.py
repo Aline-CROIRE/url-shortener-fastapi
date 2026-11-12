@@ -1,7 +1,19 @@
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, Text, true
+from sqlalchemy import (
+    CheckConstraint,
+    ColumnElement,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    and_,
+    or_,
+    true,
+)
+from sqlalchemy.ext.hybrid import hybrid_method
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin
@@ -63,6 +75,29 @@ class URL(TimestampMixin, Base):
         back_populates="urls",
         passive_deletes=True,
     )
+
+    # ---------- the "is this link usable?" rules, written once ----------
+    # A hybrid method works in two places:
+    #   url.is_live(now)  -> True/False, computed in Python on a loaded object
+    #   URL.is_live(now)  -> a SQL condition, usable in select(URL).where(...)
+
+    @hybrid_method
+    def is_expired(self, now: datetime) -> bool:
+        """Expiry reached. Exactly at expires_at counts as expired."""
+        return self.expires_at is not None and self.expires_at <= now
+
+    @is_expired.expression
+    def is_expired(cls, now: datetime) -> ColumnElement[bool]:
+        return cls.expires_at <= now  # NULL <= now is not true, so "no expiry" never matches
+
+    @hybrid_method
+    def is_live(self, now: datetime) -> bool:
+        """Switched on and not expired: the link may redirect."""
+        return self.is_active and not self.is_expired(now)
+
+    @is_live.expression
+    def is_live(cls, now: datetime) -> ColumnElement[bool]:
+        return and_(cls.is_active.is_(True), or_(cls.expires_at.is_(None), cls.expires_at > now))
 
     def __repr__(self) -> str:
         return f"<URL id={self.id} short_code={self.short_code!r} owner_id={self.owner_id}>"

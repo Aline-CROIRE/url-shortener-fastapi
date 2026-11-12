@@ -5,9 +5,12 @@ from typing import Any
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import IntegrityError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.core.exceptions import AppError
+from app.core.exceptions import AppError, ConflictError
+
+UNIQUE_VIOLATION = "23505"  # PostgreSQL error code (SQLSTATE) for a duplicate unique value
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +61,16 @@ async def validation_exception_handler(
     )
 
 
+async def integrity_error_handler(request: Request, exc: IntegrityError) -> JSONResponse:
+    """Duplicate unique value -> clean 409. Any other constraint error is a bug -> 500."""
+    if getattr(exc.orig, "sqlstate", None) != UNIQUE_VIOLATION:
+        return await unhandled_exception_handler(request, exc)
+    # Thanks to our naming convention the name is readable, e.g. "uq_users_email"
+    constraint = getattr(exc.orig.__cause__, "constraint_name", None)
+    conflict = ConflictError(details={"constraint": constraint})
+    return await app_error_handler(request, conflict)
+
+
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     # Full stack trace goes to the server log only, never to the client
     logger.exception("Unhandled error on %s %s", request.method, request.url.path)
@@ -74,4 +87,5 @@ def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(AppError, app_error_handler)
     app.add_exception_handler(StarletteHTTPException, http_exception_handler)
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
+    app.add_exception_handler(IntegrityError, integrity_error_handler)
     app.add_exception_handler(Exception, unhandled_exception_handler)

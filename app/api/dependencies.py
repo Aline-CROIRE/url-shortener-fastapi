@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings
 from app.db.database import get_db
 from app.repositories import ClickRepository, TagRepository, URLRepository, UserRepository
+from app.services.redirect import RedirectService
 from app.services.url_shortener import UrlShortenerService
 from app.storage.base import UrlRepository
 
@@ -41,6 +42,18 @@ UserRepoDep = Annotated[UserRepository, Depends(get_user_repository)]
 URLRepoDep = Annotated[URLRepository, Depends(get_url_repository)]
 ClickRepoDep = Annotated[ClickRepository, Depends(get_click_repository)]
 TagRepoDep = Annotated[TagRepository, Depends(get_tag_repository)]
+
+
+# ---------- services (they own the transactions) ----------
+
+
+def get_redirect_service(
+    db: DbSession, urls: URLRepoDep, clicks: ClickRepoDep
+) -> RedirectService:
+    return RedirectService(session=db, urls=urls, clicks=clicks)
+
+
+RedirectServiceDep = Annotated[RedirectService, Depends(get_redirect_service)]
 
 
 # ---------- Module 5 storage (memory/Redis), still used by the URL routes ----------
