@@ -39,6 +39,10 @@ class URL(TimestampMixin, Base):
             name="custom_alias_matches_short_code",
         ),
         Index("ix_urls_created_at", "created_at"),  # fast "newest first" lists
+        # The URL list: "this owner's URLs, newest first, after this bookmark".
+        # Leftmost prefix: also serves "WHERE owner_id = ?" (FK lookups, cascades),
+        # so owner_id needs no index of its own.
+        Index("ix_urls_owner_id_created_at_id", "owner_id", "created_at", "id"),
     )
 
     original_url: Mapped[str] = mapped_column(Text)
@@ -48,10 +52,8 @@ class URL(TimestampMixin, Base):
     custom_alias: Mapped[str | None] = mapped_column(
         String(SHORT_CODE_MAX_LENGTH), unique=True
     )
-    owner_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"),
-        index=True,  # Postgres does not index foreign keys automatically
-    )
+    # Indexed by ix_urls_owner_id_created_at_id (Postgres does not index FKs itself)
+    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
     is_active: Mapped[bool] = mapped_column(default=True, server_default=true())
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Soft delete: the row stays (its short code is never reused, its clicks are kept)
