@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import Select, exists, or_, select
+from sqlalchemy import Select, exists, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import URL
@@ -28,19 +28,14 @@ class URLRepository:
     @staticmethod
     def active_urls(now: datetime | None = None) -> Select[tuple[URL]]:
         """Switched on AND (no expiry OR expiry still in the future)."""
-        now = now or utc_now()
-        return select(URL).where(
-            URL.is_active.is_(True),
-            or_(URL.expires_at.is_(None), URL.expires_at > now),
-        )
+        return select(URL).where(URL.is_live(now or utc_now()))
 
     @staticmethod
     def expired_urls(now: datetime | None = None) -> Select[tuple[URL]]:
         """Expiry reached. "<=" (not "<"): a URL expiring exactly now is expired,
         so no URL falls between active_urls() and expired_urls().
         """
-        now = now or utc_now()
-        return select(URL).where(URL.expires_at <= now)
+        return select(URL).where(URL.is_expired(now or utc_now()))
 
     @staticmethod
     def popular_urls(limit: int = 10) -> Select[tuple[URL]]:
@@ -75,3 +70,19 @@ class URLRepository:
         self._session.add(url)
         await self._session.flush()
         return url
+
+    async def increment_click_count(self, url_id: int) -> None:
+        """Add 1 INSIDE the database: UPDATE urls SET click_count = click_count + 1.
+
+        Postgres reads and writes the value in one step under a row lock, so two
+        visits at the same moment both count (no "lost update"). Reading the
+        number into Python, adding 1 and writing it back would lose one of them.
+        """
+        await self._session.execute(
+            update(URL)
+            .where(URL.id == url_id)
+            .values(click_count=URL.click_count + 1)
+            # the URL object in this session may be stale now; don't try to
+            # recompute it in Python, just leave it for a fresh read if needed
+            .execution_options(synchronize_session=False)
+        )
