@@ -5,9 +5,11 @@ from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, Tex
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin
+from app.models.tag import url_tags
 
 if TYPE_CHECKING:  # only for type checkers: avoids a circular import at runtime
     from app.models.click import Click
+    from app.models.tag import Tag
     from app.models.user import User
 
 SHORT_CODE_MAX_LENGTH = 10
@@ -53,6 +55,13 @@ class URL(TimestampMixin, Base):
         back_populates="url",
         cascade="all, delete-orphan",
         passive_deletes=True,  # let Postgres' ON DELETE CASCADE remove the clicks
+    )
+    # Many-to-many through the url_tags table. No delete-orphan: deleting a URL
+    # must never delete the tags other URLs still use.
+    tags: Mapped[list["Tag"]] = relationship(
+        secondary=url_tags,
+        back_populates="urls",
+        passive_deletes=True,
     )
 
     def __repr__(self) -> str:
