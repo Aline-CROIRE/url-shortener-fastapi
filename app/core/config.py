@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     base_url: str = "http://localhost:8000"
     # PostgreSQL address: postgresql+asyncpg://<user>:<password>@<host>:<port>/<database>
     database_url: str = "postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/url_shortener"
+    # Optional read-only replica for GET endpoints. Empty = reads use the primary
+    database_replica_url: str = ""
     # A separate database used only by pytest, so tests never touch real data
     test_database_url: str = "postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/url_shortener_test"
     # True = print every SQL statement in the logs (handy for learning and debugging)
