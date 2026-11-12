@@ -28,6 +28,27 @@ class UrlNotFoundError(AppError):
         )
 
 
+class UrlGoneError(AppError):
+    """The short URL exists but must not redirect any more (410 Gone)."""
+
+    status_code = 410
+
+    def __init__(self, short_code: str, reason: str) -> None:
+        self.code = f"url_{reason}"  # "url_expired" or "url_inactive"
+        super().__init__(
+            message=f"Short URL '{short_code}' is {reason} and no longer redirects.",
+            details={"short_code": short_code},
+        )
+
+
+class ConflictError(AppError):
+    """A unique value is already taken (409 Conflict)."""
+
+    status_code = 409
+    code = "conflict"
+    message = "This value already exists."
+
+
 class ShortCodeGenerationError(AppError):
     status_code = 500
     code = "short_code_generation_failed"
