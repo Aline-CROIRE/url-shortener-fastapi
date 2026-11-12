@@ -7,6 +7,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base, TimestampMixin
 
 if TYPE_CHECKING:  # only for type checkers: avoids a circular import at runtime
+    from app.models.click import Click
     from app.models.user import User
 
 SHORT_CODE_MAX_LENGTH = 10
@@ -48,6 +49,11 @@ class URL(TimestampMixin, Base):
     click_count: Mapped[int] = mapped_column(default=0, server_default="0")
 
     owner: Mapped["User"] = relationship(back_populates="urls")
+    clicks: Mapped[list["Click"]] = relationship(
+        back_populates="url",
+        cascade="all, delete-orphan",
+        passive_deletes=True,  # let Postgres' ON DELETE CASCADE remove the clicks
+    )
 
     def __repr__(self) -> str:
         return f"<URL id={self.id} short_code={self.short_code!r} owner_id={self.owner_id}>"
