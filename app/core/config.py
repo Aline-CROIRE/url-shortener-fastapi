@@ -18,6 +18,12 @@ class Settings(BaseSettings):
     redis_url: str = "redis://127.0.0.1:6379/0"
     # "memory" = Python dict (no setup needed), "redis" = Redis server at redis_url
     storage_backend: Literal["memory", "redis"] = "memory"
+    # PostgreSQL address: postgresql+asyncpg://<user>:<password>@<host>:<port>/<database>
+    database_url: str = "postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/url_shortener"
+    # A separate database used only by pytest, so tests never touch real data
+    test_database_url: str = "postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/url_shortener_test"
+    # True = print every SQL statement in the logs (handy for learning and debugging)
+    db_echo: bool = False
     # Number of Gunicorn worker processes in production (see gunicorn.conf.py)
     workers: int = Field(default=2, ge=1)
 
