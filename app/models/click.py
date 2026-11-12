@@ -41,7 +41,8 @@ class Click(Base):
     country: Mapped[str | None] = mapped_column(String(2))
     city: Mapped[str | None] = mapped_column(String(100))
 
-    url: Mapped["URL"] = relationship(back_populates="clicks")
+    # lazy="raise": never loaded behind our back; ask with joinedload(Click.url)
+    url: Mapped["URL"] = relationship(back_populates="clicks", lazy="raise")
 
     def __repr__(self) -> str:
         return f"<Click id={self.id} url_id={self.url_id} clicked_at={self.clicked_at}>"

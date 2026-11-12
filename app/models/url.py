@@ -66,9 +66,12 @@ class URL(TimestampMixin, Base):
 
     click_count: Mapped[int] = mapped_column(default=0, server_default="0")
 
-    owner: Mapped["User"] = relationship(back_populates="urls")
+    # lazy="raise" on every relationship: touching one that was not loaded on purpose
+    # raises a clear error instead of silently sending one query per row (N+1)
+    owner: Mapped["User"] = relationship(back_populates="urls", lazy="raise")
     clicks: Mapped[list["Click"]] = relationship(
         back_populates="url",
+        lazy="raise",
         cascade="all, delete-orphan",
         passive_deletes=True,  # let Postgres' ON DELETE CASCADE remove the clicks
     )
@@ -77,6 +80,7 @@ class URL(TimestampMixin, Base):
     tags: Mapped[list["Tag"]] = relationship(
         secondary=url_tags,
         back_populates="urls",
+        lazy="raise",
         passive_deletes=True,
     )
 

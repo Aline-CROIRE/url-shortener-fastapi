@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from sqlalchemy import DateTime, MetaData, func
+from sqlalchemy.ext.asyncio import AsyncAttrs
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 # Gives every index and constraint a predictable name, e.g. "uq_users_email".
@@ -14,8 +15,12 @@ NAMING_CONVENTION = {
 }
 
 
-class Base(DeclarativeBase):
-    """Parent class of every table model. Its metadata is the list of all tables."""
+class Base(AsyncAttrs, DeclarativeBase):
+    """Parent class of every table model. Its metadata is the list of all tables.
+
+    AsyncAttrs adds obj.awaitable_attrs.<relationship>: the async way to load a
+    relationship on purpose (await url.awaitable_attrs.tags).
+    """
 
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
