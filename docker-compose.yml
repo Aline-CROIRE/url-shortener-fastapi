@@ -25,6 +25,20 @@ services:
     depends_on:
       redis:
         condition: service_healthy # wait until Redis answers PING
+      migrate:
+        condition: service_completed_successfully # start only after the schema is up to date
+
+  # One-off job: brings the database to the newest migration, then exits.
+  # Runs once, before the app, so app workers never race to migrate.
+  migrate:
+    build: .
+    command: alembic upgrade head
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/url_shortener
+    volumes:
+      - ./alembic:/app/alembic # new migrations are picked up without rebuilding
+      - ./app:/app/app
+    depends_on:
       db:
         condition: service_healthy # wait until Postgres accepts connections
 
