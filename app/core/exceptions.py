@@ -49,13 +49,18 @@ class ConflictError(AppError):
     message = "This value already exists."
 
 
+class AliasTakenError(ConflictError):
+    code = "alias_taken"
+
+    def __init__(self, alias: str) -> None:
+        super().__init__(
+            message=f"The alias '{alias}' is already taken. Please choose another one.",
+            details={"custom_alias": alias},
+        )
+
+
 class ShortCodeGenerationError(AppError):
     status_code = 500
     code = "short_code_generation_failed"
     message = "Could not generate a unique short code. Please try again."
 
-
-class StorageUnavailableError(AppError):
-    status_code = 503
-    code = "storage_unavailable"
-    message = "The storage service is temporarily unavailable. Please try again later."

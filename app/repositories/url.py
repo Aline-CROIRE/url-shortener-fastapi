@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import Select, exists, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload, selectinload
 
 from app.models import URL
 
@@ -59,6 +60,20 @@ class URLRepository:
 
     async def get_by_short_code(self, short_code: str) -> URL | None:
         return await self._session.scalar(select(URL).where(URL.short_code == short_code))
+
+    async def get_owned(self, short_code: str, owner_id: int) -> URL | None:
+        """One NOT deleted URL of this owner, with owner and tags already loaded
+        (async code cannot lazy-load them later). Someone else's URL -> None.
+        """
+        return await self._session.scalar(
+            select(URL)
+            .where(
+                URL.short_code == short_code,
+                URL.owner_id == owner_id,
+                URL.deleted_at.is_(None),
+            )
+            .options(joinedload(URL.owner), selectinload(URL.tags))
+        )
 
     async def short_code_exists(self, short_code: str) -> bool:
         # SELECT EXISTS(...): Postgres stops at the first match, no row is loaded
