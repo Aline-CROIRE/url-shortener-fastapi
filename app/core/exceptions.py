@@ -59,6 +59,14 @@ class AliasTakenError(ConflictError):
         )
 
 
+class InvalidCursorError(AppError):
+    """The pagination cursor is broken, forged or from another sort order (400)."""
+
+    status_code = 400
+    code = "invalid_cursor"
+    message = "The cursor is not valid. Start again without a cursor."
+
+
 class ShortCodeGenerationError(AppError):
     status_code = 500
     code = "short_code_generation_failed"
