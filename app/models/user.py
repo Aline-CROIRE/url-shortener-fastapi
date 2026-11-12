@@ -1,9 +1,13 @@
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from sqlalchemy import Enum, String, false
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin
+
+if TYPE_CHECKING:  # only for type checkers: avoids a circular import at runtime
+    from app.models.url import URL
 
 
 class UserTier(StrEnum):
@@ -33,6 +37,15 @@ class User(TimestampMixin, Base):
         ),
         default=UserTier.FREE,
         server_default=UserTier.FREE.value,
+    )
+
+    urls: Mapped[list["URL"]] = relationship(
+        back_populates="owner",
+        # Deleting a user through the ORM also deletes their URLs...
+        cascade="all, delete-orphan",
+        # ...but let Postgres do it (ondelete="CASCADE"): one DELETE instead of
+        # loading every URL into Python first
+        passive_deletes=True,
     )
 
     def __repr__(self) -> str:
