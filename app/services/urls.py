@@ -2,6 +2,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.cache import NullRedirectCache, RedirectCache
 from app.core.exceptions import AliasTakenError, ShortCodeGenerationError, UrlNotFoundError
 from app.db.errors import unique_violation_constraint
 from app.models import URL
@@ -29,11 +30,13 @@ class URLService:
         urls: URLRepository,
         users: UserRepository,
         tags: TagRepository,
+        cache: RedirectCache | None = None,
     ) -> None:
         self._session = session
         self._urls = urls
         self._users = users
         self._tags = tags
+        self._cache = cache or NullRedirectCache()
 
     async def create(self, data: URLCreate, owner_id: int) -> URL:
         """Save the URL and its tags together. A chosen alias becomes the short code.
@@ -110,6 +113,9 @@ class URLService:
                 # Also when only the tags changed: the URL did change
                 url.updated_at = func.now()
             await self._session.flush()
+        # AFTER the commit: invalidating earlier would let another request re-cache
+        # the old version before our change is saved
+        await self._cache.invalidate(short_code)
         return url
 
     async def delete(self, short_code: str, owner_id: int) -> None:
@@ -119,3 +125,4 @@ class URLService:
             if url is None:
                 raise UrlNotFoundError(short_code)
             url.deleted_at = func.now()
+        await self._cache.invalidate(short_code)  # after the commit (see update)

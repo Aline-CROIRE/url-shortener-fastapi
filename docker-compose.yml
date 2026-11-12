@@ -1,4 +1,4 @@
-# Local DEVELOPMENT: app with hot reload + PostgreSQL
+# Local DEVELOPMENT: app with hot reload + PostgreSQL + Redis (cache)
 # Run: docker compose up --build
 services:
   app:
@@ -15,6 +15,7 @@ services:
       ENVIRONMENT: development
       DEBUG: "true"
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/url_shortener # "db" = service below
+      REDIS_URL: redis://redis:6379/0 # "redis" = the service name below
       BASE_URL: http://localhost:8000
       # Windows/macOS do not send file-change events into containers; poll instead
       WATCHFILES_FORCE_POLLING: "true"
@@ -23,6 +24,8 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully # start only after the schema is up to date
+      redis:
+        condition: service_healthy # the app also works without it, but start it first
 
   # One-off job: brings the database to the newest migration, then exits.
   # Runs once, before the app, so app workers never race to migrate.
@@ -37,6 +40,17 @@ services:
     depends_on:
       db:
         condition: service_healthy # wait until Postgres accepts connections
+
+  redis:
+    image: redis:8-alpine
+    ports:
+      - "127.0.0.1:6379:6379" # only this computer can connect (local runs + integration tests)
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    # A cache, not a database: no volume. Losing it only means a few cache misses.
 
   db:
     image: postgres:17-alpine

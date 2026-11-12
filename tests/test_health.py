@@ -12,7 +12,7 @@ def test_health_returns_200(client: TestClient) -> None:
     response = client.get("/health")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "healthy", "database": "ok"}
+    assert response.json() == {"status": "healthy", "database": "ok", "cache": "disabled"}
 
 
 def test_health_is_outside_api_version_prefix(client: TestClient) -> None:
@@ -25,7 +25,7 @@ def test_health_returns_503_when_database_is_down(app: FastAPI, client: TestClie
     response = client.get("/health")
 
     assert response.status_code == 503
-    assert response.json() == {"status": "unhealthy", "database": "down"}
+    assert response.json() == {"status": "unhealthy", "database": "down", "cache": "disabled"}
 
 
 def test_real_database_failure_is_reported_and_logged(
@@ -39,5 +39,5 @@ def test_real_database_failure_is_reported_and_logged(
     response = client.get("/health")
 
     assert response.status_code == 503
-    assert response.json() == {"status": "unhealthy", "database": "down"}
+    assert response.json() == {"status": "unhealthy", "database": "down", "cache": "disabled"}
     assert "Database health check failed" in caplog.text  # the failure is not hidden
