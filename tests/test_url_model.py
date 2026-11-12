@@ -2,7 +2,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import delete, func, select, text
-from sqlalchemy.exc import DBAPIError, IntegrityError, MissingGreenlet
+from sqlalchemy.exc import DBAPIError, IntegrityError, InvalidRequestError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
@@ -141,8 +141,9 @@ async def test_lazy_loading_is_not_allowed_in_async(db_session: AsyncSession, ow
 
     url = (await db_session.execute(select(URL))).scalar_one()  # owner NOT loaded
 
-    # Async code cannot run a hidden SELECT: we must load relationships on purpose
-    with pytest.raises(MissingGreenlet):
+    # lazy="raise" (F3.1): touching a relationship that was not loaded on purpose
+    # raises a clear error instead of a hidden SELECT (or a confusing MissingGreenlet)
+    with pytest.raises(InvalidRequestError, match="'URL.owner' is not available due to lazy='raise'"):
         _ = url.owner
 
 

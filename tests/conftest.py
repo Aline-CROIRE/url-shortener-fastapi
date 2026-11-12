@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,7 @@ from sqlalchemy.pool import NullPool
 from app.api.owner import get_current_owner_id
 from app.core.config import Settings, get_settings
 from app.db.database import get_db
+from app.db.query_counter import QueryCounter, count_queries
 from app.main import create_app
 from app.models import User
 
@@ -105,6 +107,7 @@ def db_client(
 
     with TestClient(app, follow_redirects=False, raise_server_exceptions=False) as test_client:
         # Inside TestClient's event loop: every request of this test uses this connection
+        db_state["engine"] = engine  # for counting queries (F3.1)
         db_state["connection"] = test_client.portal.call(open_connection)
         db_state["client"] = test_client
         db_state["session_factory"] = test_session
@@ -158,6 +161,19 @@ async def db_session(test_settings: Settings) -> AsyncIterator[AsyncSession]:
             await session.close()
             await transaction.rollback()
     await engine.dispose()
+
+
+@pytest.fixture
+def query_counter(
+    db_client: TestClient, db_state: dict[str, Any]
+) -> Callable[[], AbstractContextManager[QueryCounter]]:
+    """Count the SQL statements sent while a block runs:
+
+        with query_counter() as counter:
+            db_client.get("/api/v1/urls")
+        assert counter.count <= 3, counter.statements
+    """
+    return lambda: count_queries(db_state["engine"])
 
 
 @pytest.fixture
