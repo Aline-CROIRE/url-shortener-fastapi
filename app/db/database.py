@@ -1,6 +1,7 @@
 from collections.abc import AsyncIterator
 
 from fastapi import Request
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -40,3 +41,8 @@ async def get_db(request: Request) -> AsyncIterator[AsyncSession]:
         except Exception:
             await session.rollback()  # undo half-finished work if the request failed
             raise
+
+
+async def ping_database(session: AsyncSession) -> None:
+    """Run the smallest possible query; raises if PostgreSQL does not answer."""
+    await session.execute(text("SELECT 1"))
