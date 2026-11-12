@@ -2,11 +2,11 @@ import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Response, status
-from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.api.dependencies import DbSession, get_repository, get_settings_from_app
 from app.core.config import Settings
+from app.db.database import ping_database
 from app.storage.base import UrlRepository
 
 logger = logging.getLogger(__name__)
@@ -17,7 +17,7 @@ router = APIRouter(tags=["Health"])
 async def database_is_up(db: DbSession) -> bool:
     """Run the smallest possible query to prove PostgreSQL answers."""
     try:
-        await db.execute(text("SELECT 1"))
+        await ping_database(db)
     except (SQLAlchemyError, OSError):
         logger.warning("Database health check failed", exc_info=True)
         return False
