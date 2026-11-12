@@ -43,6 +43,13 @@ CONFLICT: dict[int | str, dict[str, Any]] = {
         {"constraint": "uq_urls_custom_alias"},
     ),
 }
+INVALID_CURSOR: dict[int | str, dict[str, Any]] = {
+    status.HTTP_400_BAD_REQUEST: _error_doc(
+        "Bad cursor",
+        "invalid_cursor",
+        "The cursor is not valid. Start again without a cursor.",
+    ),
+}
 VALIDATION_ERROR: dict[int | str, dict[str, Any]] = {
     status.HTTP_422_UNPROCESSABLE_CONTENT: _error_doc(
         "Invalid input",

@@ -6,7 +6,9 @@ from app.core.exceptions import AliasTakenError, ShortCodeGenerationError, UrlNo
 from app.db.errors import unique_violation_constraint
 from app.models import URL
 from app.repositories import TagRepository, URLRepository, UserRepository
+from app.repositories.url import URLFilters, URLSort
 from app.schemas.url import URLCreate, URLUpdate
+from app.services.pagination import decode_cursor, encode_cursor
 from app.utils.codes import generate_code
 
 MAX_CODE_ATTEMPTS = 5
@@ -61,6 +63,26 @@ class URLService:
                     raise AliasTakenError(data.custom_alias) from exc
                 # A random code clashed (very rare): try again with a new one
         raise ShortCodeGenerationError()
+
+    async def list_page(
+        self,
+        owner_id: int,
+        filters: URLFilters,
+        sort: URLSort,
+        limit: int,
+        cursor: str | None = None,
+    ) -> tuple[list[URL], str | None]:
+        """One page of the owner's URLs and the cursor of the next page (or None)."""
+        after = decode_cursor(cursor, sort) if cursor else None
+        statement = self._urls.list_owned(owner_id, filters, sort, after)
+        # Ask for ONE extra row: if it exists, there is a next page (no COUNT(*) needed)
+        rows = await self._urls.fetch_all(statement.limit(limit + 1))
+        page = rows[:limit]
+        if len(rows) <= limit:
+            return page, None
+        last = page[-1]
+        value = last.created_at if sort is URLSort.NEWEST else last.click_count
+        return page, encode_cursor(sort, (value, last.id))
 
     async def get(self, short_code: str, owner_id: int) -> URL:
         """Read only: no explicit transaction needed (get_db closes the session)."""

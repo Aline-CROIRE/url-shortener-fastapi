@@ -150,3 +150,13 @@ class URLRead(ORMModel):
             raise ValueError("URLRead needs context={'base_url': ...} to build short_url")
         self.short_url = f"{base_url.rstrip('/')}/{self.short_code}"
         return self
+
+
+class URLPage(BaseModel):
+    """One page of the URL list (keyset pagination)."""
+
+    items: list[URLRead]
+    next_cursor: str | None = Field(
+        description="Send it as ?cursor=... to get the next page; null on the last page",
+        examples=["eyJzb3J0IjoibmV3ZXN0IiwidmFsdWVzIjpbIjIwMjYtMTEtMTJUMTA6MDA6MDArMDA6MDAiLDQyXX0"],
+    )
