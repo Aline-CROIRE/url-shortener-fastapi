@@ -178,4 +178,4 @@ async def test_indexes_exist_in_postgres(db_session: AsyncSession) -> None:
     )
     indexes = set(rows.scalars())
 
-    assert {"ix_urls_short_code", "ix_urls_created_at", "ix_urls_owner_id"} <= indexes
+    assert {"ix_urls_short_code", "ix_urls_created_at", "ix_urls_owner_id_created_at_id"} <= indexes
