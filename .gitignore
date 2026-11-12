@@ -7,3 +7,7 @@ __pycache__/
 # Personal study files (not part of the graded project)
 CLAUDE.md
 learning-notes/
+
+# Coverage data and HTML reports (pytest --cov)
+.coverage
+htmlcov/
