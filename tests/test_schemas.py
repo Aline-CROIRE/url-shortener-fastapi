@@ -194,6 +194,7 @@ async def test_analytics_schemas_read_sql_rows(db_session: AsyncSession) -> None
 def test_url_analytics_shape() -> None:
     analytics = URLAnalytics(
         short_code="py-docs",
+        days=30,
         total_clicks=4,
         unique_visitors=2,
         first_click_at=None,
