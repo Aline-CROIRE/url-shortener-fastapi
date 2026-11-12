@@ -16,8 +16,6 @@ from app.db.database import create_engine, create_read_engine, create_session_fa
 
 logger = logging.getLogger(__name__)
 
-API_DESCRIPTION = 'Errors use one shape: `{"error": {"code", "message", "details"}}`.'
-
 OPENAPI_TAGS = [
     {"name": "URLs", "description": "Create and look up short URLs."},
     {"name": "Analytics", "description": "Click statistics, computed in SQL."},
@@ -70,7 +68,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         title=settings.app_name,
         version=settings.app_version,
         summary="Turn long URLs into short links.",
-        description=API_DESCRIPTION,
         openapi_tags=OPENAPI_TAGS,
         # FastAPI(debug=True) would send stack traces to clients and skip our JSON
         # 500 handler, so it stays off. settings.debug only changes the log level.
