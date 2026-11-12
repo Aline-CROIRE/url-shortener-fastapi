@@ -152,6 +152,16 @@ class URLRepository:
             .options(joinedload(URL.owner), selectinload(URL.tags))
         )
 
+    async def owned_url_id(self, short_code: str, owner_id: int) -> int | None:
+        """Just the id of one NOT deleted URL of this owner (nothing else is loaded)."""
+        return await self._session.scalar(
+            select(URL.id).where(
+                URL.short_code == short_code,
+                URL.owner_id == owner_id,
+                URL.deleted_at.is_(None),
+            )
+        )
+
     async def short_code_exists(self, short_code: str) -> bool:
         # SELECT EXISTS(...): Postgres stops at the first match, no row is loaded
         return bool(
