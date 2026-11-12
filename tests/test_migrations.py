@@ -37,5 +37,5 @@ def test_downgrade_to_base_removes_everything_and_upgrade_rebuilds() -> None:
 
     command.upgrade(config, "head")  # build everything again
     tables, types = asyncio.run(tables_and_types(url))
-    assert "users" in tables
+    assert {"users", "urls"} <= tables
     assert "user_tier" in types
