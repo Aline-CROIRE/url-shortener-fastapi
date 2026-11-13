@@ -12,6 +12,10 @@ Pygments==2.21.0
 pytest-cov==7.1.0
 coverage==7.17.2
 
+# Code quality: ruff check, ruff format, mypy
+ruff==0.17.5
+mypy==2.4.1
+
 # HTTP client used by FastAPI's TestClient
 httpx==0.28.1
 httpcore==1.0.9
