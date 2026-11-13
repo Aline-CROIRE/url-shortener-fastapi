@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, create_async_e
 from sqlalchemy.pool import NullPool
 
 from alembic import command
-from app.api.owner import get_current_owner_id
+from app.api.auth import get_current_owner_id, get_session_factory
 from app.core.config import Settings, get_settings
 from app.db.database import get_db, get_read_db
 from app.db.query_counter import QueryCounter, count_queries
@@ -108,6 +108,8 @@ def db_client(
     # Reads use the SAME test transaction, so they see the data the test wrote
     # (in production the read side may be a replica, a moment behind)
     app.dependency_overrides[get_read_db] = override_get_db
+    # The login check (who is this cookie?) opens its own short session: same test transaction
+    app.dependency_overrides[get_session_factory] = lambda: test_session
 
     with TestClient(app, follow_redirects=False, raise_server_exceptions=False) as test_client:
         # Inside TestClient's event loop: every request of this test uses this connection
@@ -184,7 +186,8 @@ def query_counter(
 def owner_id(app: FastAPI, run_db: Callable[..., Any]) -> int:
     """Seed a user and make the app treat them as the current owner.
 
-    Replaces the temporary demo owner (and, in Module 7, the JWT user) in tests.
+    A shortcut for tests that are not about login: no register/login request needed.
+    The real cookie login is tested in tests/test_auth.py.
     """
 
     async def create_owner(session: AsyncSession) -> int:

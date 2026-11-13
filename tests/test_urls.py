@@ -1,19 +1,16 @@
 """/api/v1/urls endpoints: create, read, update and soft delete the owner's URLs."""
 
 import re
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.pool import NullPool
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.owner import DEMO_OWNER_EMAIL
 from app.models import URL, Click, Tag, User
 from app.repositories import TagRepository, URLRepository
 from app.services import urls as url_service_module
@@ -315,40 +312,6 @@ def test_delete_twice_returns_404(db_client: TestClient, owner_id: int) -> None:
 
     assert db_client.delete(f"{API}/{code}").status_code == 204
     assert db_client.delete(f"{API}/{code}").status_code == 404
-
-
-# ---------- the temporary owner (TODO(module-7)) ----------
-
-
-@pytest.fixture
-def remove_demo_owner(test_settings: Any) -> Iterator[None]:
-    """The demo owner is created with the app's own session (really committed),
-    so delete it again after the test."""
-    yield
-
-    async def cleanup() -> None:
-        engine = create_async_engine(test_settings.test_database_url, poolclass=NullPool)
-        async with engine.begin() as connection:
-            await connection.execute(
-                text("DELETE FROM users WHERE email = :email"), {"email": DEMO_OWNER_EMAIL}
-            )
-        await engine.dispose()
-
-    import asyncio
-
-    asyncio.run(cleanup())
-
-
-def test_demo_owner_is_created_once_and_cached(
-    app: FastAPI, db_client: TestClient, remove_demo_owner: None
-) -> None:
-    # No owner_id fixture here: the real temporary mechanism runs
-    assert db_client.get(f"{API}/nothing").status_code == 404
-    first_id = app.state.demo_owner_id
-    assert db_client.get(f"{API}/nothing").status_code == 404
-
-    assert isinstance(first_id, int)
-    assert app.state.demo_owner_id == first_id  # cached: not looked up again
 
 
 # ---------- coverage gaps (F3.3) ----------

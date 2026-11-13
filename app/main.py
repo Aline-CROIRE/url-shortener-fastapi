@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from redis.asyncio import Redis
+from starlette.middleware.sessions import SessionMiddleware
 
 from app.api.router import router
 from app.api.routes import health, redirect
@@ -14,11 +15,13 @@ from app.core.config import Settings, get_settings
 from app.core.error_handlers import register_exception_handlers
 from app.core.logging import setup_logging
 from app.core.middleware import RequestLoggingMiddleware
+from app.core.security import SESSION_COOKIE
 from app.db.database import create_engine, create_read_engine, create_session_factory
 
 logger = logging.getLogger(__name__)
 
 OPENAPI_TAGS = [
+    {"name": "Auth", "description": "Register, log in and log out."},
     {"name": "URLs", "description": "Create and look up short URLs."},
     {"name": "Analytics", "description": "Click statistics, computed in SQL."},
     {"name": "Redirect", "description": "Open a short link."},
@@ -85,6 +88,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
 
     app.add_middleware(RequestLoggingMiddleware)
+    # The login cookie: signed with SECRET_KEY (cannot be changed by the user),
+    # HttpOnly (JavaScript cannot read it), SameSite=Lax (other websites cannot
+    # send POST/PUT/DELETE requests with it), HTTPS-only when configured
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=settings.secret_key,
+        session_cookie=SESSION_COOKIE,
+        max_age=settings.session_max_age_seconds,
+        same_site="lax",
+        https_only=settings.session_https_only,
+    )
     register_exception_handlers(app)
 
     app.include_router(health.router)

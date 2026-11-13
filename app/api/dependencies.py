@@ -10,6 +10,7 @@ from app.core.config import Settings
 from app.db.database import get_db, get_read_db
 from app.repositories import ClickRepository, TagRepository, URLRepository, UserRepository
 from app.services.analytics import AnalyticsService
+from app.services.auth import AuthService
 from app.services.redirect import RedirectService
 from app.services.urls import URLService
 
@@ -129,3 +130,11 @@ def get_analytics_service(urls: ReadURLRepoDep, clicks: ReadClickRepoDep) -> Ana
 
 
 AnalyticsServiceDep = Annotated[AnalyticsService, Depends(get_analytics_service)]
+
+
+def get_auth_service(db: DbSession, users: UserRepoDep) -> AuthService:
+    """Build the auth service (write side: register and login write to the database)."""
+    return AuthService(session=db, users=users)
+
+
+AuthServiceDep = Annotated[AuthService, Depends(get_auth_service)]

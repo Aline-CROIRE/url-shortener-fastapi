@@ -228,6 +228,10 @@ python -m app.scripts.seed         # fill the database with sample data
 
 | Method | Endpoint | Description |
 |---|---|---|
+| `POST` | `/api/v1/auth/register/` | Create an account |
+| `POST` | `/api/v1/auth/login/` | Log in (sets the session cookie) |
+| `POST` | `/api/v1/auth/logout/` | Log out |
+| `GET` | `/api/v1/auth/me/` | The logged-in user |
 | `POST` | `/api/v1/urls/` | Create a short URL |
 | `GET` | `/api/v1/urls/` | List your URLs |
 | `GET` | `/api/v1/urls/{short_code}/` | Get URL details (owner, tags, click count) |
@@ -237,10 +241,34 @@ python -m app.scripts.seed         # fill the database with sample data
 | `GET` | `/{short_code}/` | Redirect to the original URL (302) |
 | `GET` | `/health` | Database and cache status |
 
+### Log in
+
+The URL and analytics endpoints need a logged-in user. Each user only sees and changes
+their own URLs; anyone else's URL answers `404`. The redirect and `/health` stay public.
+
+```bash
+# 1. Create an account
+curl -X POST http://localhost:8000/api/v1/auth/register/ \
+  -H "Content-Type: application/json" \
+  -d '{"email": "aline@example.com", "username": "aline", "password": "a-long-password"}'
+
+# 2. Log in: the server answers with a signed session cookie (saved here in cookies.txt)
+curl -X POST http://localhost:8000/api/v1/auth/login/ -c cookies.txt \
+  -H "Content-Type: application/json" \
+  -d '{"email": "aline@example.com", "password": "a-long-password"}'
+
+# 3. Send the cookie with every request
+curl http://localhost:8000/api/v1/urls/ -b cookies.txt
+```
+
+In Swagger (`/docs`), call **login** once: the browser keeps the cookie and sends it with
+every request after that. Passwords are stored as Argon2 hashes. The cookie is signed with
+`SECRET_KEY`, is `HttpOnly` and `SameSite=Lax`, and expires after one day.
+
 ### Create a short URL
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/urls/ \
+curl -X POST http://localhost:8000/api/v1/urls/ -b cookies.txt \
   -H "Content-Type: application/json" \
   -d '{"original_url": "https://www.python.org/", "custom_alias": "python", "tags": ["Marketing"]}'
 ```
@@ -250,7 +278,7 @@ curl -X POST http://localhost:8000/api/v1/urls/ \
 ### List your URLs
 
 ```bash
-curl "http://localhost:8000/api/v1/urls/?limit=20&sort=newest&tag=Marketing"
+curl "http://localhost:8000/api/v1/urls/?limit=20&sort=newest&tag=Marketing" -b cookies.txt
 ```
 
 Optional filters: `tag`, `is_active`, `expired`, `search`. Sort: `newest` or `most_clicked`.
@@ -264,8 +292,8 @@ All errors use the same format:
 {"error": {"code": "url_not_found", "message": "Short URL 'abc1234' was not found.", "details": {"short_code": "abc1234"}}}
 ```
 
-Common status codes: `404` not found, `409` alias already taken, `410` link expired or
-deleted, `422` invalid input.
+Common status codes: `401` not logged in or wrong password, `404` not found, `409` alias,
+email or username already taken, `410` link expired or deleted, `422` invalid input.
 
 ## Tests
 

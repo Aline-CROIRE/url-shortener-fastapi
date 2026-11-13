@@ -4,8 +4,8 @@ from typing import Annotated
 
 from fastapi import APIRouter, Body, Query, Response, status
 
+from app.api.auth import CurrentOwnerId
 from app.api.dependencies import SettingsDep, URLReadServiceDep, URLServiceDep
-from app.api.owner import CurrentOwnerId
 from app.api.params import ShortCodePath
 from app.api.responses import (
     CONFLICT,
