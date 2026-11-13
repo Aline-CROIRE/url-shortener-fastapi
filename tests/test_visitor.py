@@ -53,7 +53,8 @@ def test_visitor_from_request_handles_missing_values() -> None:
 
 
 def test_huge_headers_are_cut() -> None:
-    request = make_request(None, {"User-Agent": "a" * 10_000, "Referer": "b" * 10_000})
+    long_referrer = "https://example.com/" + "b" * 10_000  # long, but a real URL
+    request = make_request(None, {"User-Agent": "a" * 10_000, "Referer": long_referrer})
 
     visitor = visitor_from_request(request)
 

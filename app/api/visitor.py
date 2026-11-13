@@ -1,4 +1,5 @@
 from ipaddress import IPv4Address, IPv6Address, ip_address
+from urllib.parse import urlsplit
 
 from fastapi import Request
 
@@ -25,6 +26,23 @@ def clip(value: str | None, max_length: int) -> str | None:
     return value[:max_length]
 
 
+def clean_referrer(value: str | None) -> str | None:
+    """Keep the Referer header only when it is a real http(s) URL (like Django's
+    URLField); anything else ("", "android-app://...", random text) becomes None,
+    which analytics shows as "Direct".
+    """
+    referrer = clip(value, MAX_REFERRER_LENGTH)
+    if referrer is None:
+        return None
+    try:
+        parts = urlsplit(referrer)
+    except ValueError:
+        return None
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        return None
+    return referrer
+
+
 def visitor_from_request(request: Request) -> VisitorInfo:
     # request.client.host is the direct peer. Behind a reverse proxy, run Uvicorn
     # with --proxy-headers (and trusted --forwarded-allow-ips) so this becomes the
@@ -33,5 +51,5 @@ def visitor_from_request(request: Request) -> VisitorInfo:
     return VisitorInfo(
         ip_address=parse_ip(host),
         user_agent=clip(request.headers.get("user-agent"), MAX_USER_AGENT_LENGTH),
-        referrer=clip(request.headers.get("referer"), MAX_REFERRER_LENGTH),  # sic: "referer"
+        referrer=clean_referrer(request.headers.get("referer")),  # sic: "referer"
     )
