@@ -1,5 +1,5 @@
-from datetime import datetime
-from typing import TYPE_CHECKING
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, ClassVar
 
 from sqlalchemy import (
     CheckConstraint,
@@ -7,10 +7,12 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Select,
     String,
     Text,
     and_,
     or_,
+    select,
     true,
 )
 from sqlalchemy.ext.hybrid import hybrid_method
@@ -25,10 +27,17 @@ if TYPE_CHECKING:  # only for type checkers: avoids a circular import at runtime
     from app.models.user import User
 
 SHORT_CODE_MAX_LENGTH = 10
+MAX_POPULAR_LIMIT = 100
 
 
 class URL(TimestampMixin, Base):
-    """A short link owned by a user."""
+    """A short link owned by a user.
+
+    URL.objects is the Django-style manager: URL.objects.active_urls() etc.
+    """
+
+    # ClassVar: a plain class attribute, not a database column
+    objects: ClassVar["URLManager"]
 
     __tablename__ = "urls"
     __table_args__ = (
@@ -113,3 +122,35 @@ class URL(TimestampMixin, Base):
 
     def __repr__(self) -> str:
         return f"<URL id={self.id} short_code={self.short_code!r} owner_id={self.owner_id}>"
+
+
+class URLManager:
+    """The Django "Manager" for URLs: URL.objects.active_urls(), .expired_urls(),
+    .popular_urls().
+
+    Each method returns a select() statement (nothing is sent yet), so callers can
+    keep adding .where(), .order_by() or .limit() and run it once, e.g.
+        URL.objects.active_urls().where(URL.owner_id == 5)
+    """
+
+    @staticmethod
+    def active_urls(now: datetime | None = None) -> Select[tuple[URL]]:
+        """Not deleted, switched on, and no expiry or expiry still in the future."""
+        return select(URL).where(URL.is_live(now or datetime.now(UTC)))
+
+    @staticmethod
+    def expired_urls(now: datetime | None = None) -> Select[tuple[URL]]:
+        """Expiry reached. "<=" (not "<"): a URL expiring exactly now is expired,
+        so no URL falls between active_urls() and expired_urls().
+        """
+        return select(URL).where(URL.is_expired(now or datetime.now(UTC)))
+
+    @staticmethod
+    def popular_urls(limit: int = 10) -> Select[tuple[URL]]:
+        """Most clicked first; id breaks ties so the order is always the same."""
+        if not 1 <= limit <= MAX_POPULAR_LIMIT:
+            raise ValueError(f"limit must be between 1 and {MAX_POPULAR_LIMIT}")
+        return select(URL).order_by(URL.click_count.desc(), URL.id).limit(limit)
+
+
+URL.objects = URLManager()

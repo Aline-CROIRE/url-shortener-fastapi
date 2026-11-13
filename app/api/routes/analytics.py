@@ -13,8 +13,9 @@ router = APIRouter(prefix="/analytics", tags=["Analytics"])
 MAX_DAYS = 365
 
 
+@router.get("/{short_code}", include_in_schema=False)  # alias without the slash
 @router.get(
-    "/{short_code}",
+    "/{short_code}/",
     summary="Click analytics of one of your short URLs",
     description=(
         "Totals, unique visitors (estimated by IP), first/last click, and clicks per "

@@ -179,11 +179,11 @@ def test_url_and_tags_are_saved_in_one_transaction(
     assert count_rows(run_db, Tag) == tags_before  # ...and no half-created tag
 
 
-def test_trailing_slash_redirects_with_307(db_client: TestClient, owner_id: int) -> None:
+def test_trailing_slash_path_is_served_directly(db_client: TestClient, owner_id: int) -> None:
+    # "/api/v1/urls/" is the specification's path: no 307 redirect any more
     response = db_client.post(f"{API}/", json={"original_url": TARGET})
 
-    assert response.status_code == 307  # 307 keeps the method (POST) and the body
-    assert response.headers["location"].endswith(API)
+    assert response.status_code == 201
 
 
 # ---------- GET /api/v1/urls/{short_code} ----------

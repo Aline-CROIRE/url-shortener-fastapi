@@ -9,13 +9,15 @@ async SQLAlchemy 2.0 models, Alembic migrations, repositories, transactions, key
 pagination, SQL aggregation, N+1 prevention, a Redis cache and an optional read replica.
 
 > **FastAPI instead of Django.** The course is written for Django; the instructor approved
-> FastAPI for this project. The table below maps each Django concept to its equivalent here.
+> FastAPI for this project (approval: *instructor name, date*). The table below maps each
+> Django concept to its equivalent here.
 
 | Django | This project |
 |---|---|
 | `models.Model` | SQLAlchemy 2.0 models (`DeclarativeBase`, `Mapped[...]`, `mapped_column()`) in [app/models/](app/models/) |
 | `makemigrations` / `migrate` | Alembic: `alembic revision --autogenerate`, `alembic upgrade head` |
-| Model `Manager` (`URL.objects.active()`) | Repository classes in [app/repositories/](app/repositories/) (`URLRepository.active_urls()`) |
+| Model `Manager` (`URL.objects.active_urls()`) | `URL.objects` (a `URLManager`) in [app/models/url.py](app/models/url.py), reused by the repositories in [app/repositories/](app/repositories/) |
+| `AbstractUser` | `User` model with the same fields (`username`, `first_name`, `last_name`, `email`, `is_staff`, `is_active`, `is_superuser`, `last_login`, `date_joined`) |
 | `select_related()` | `joinedload()` |
 | `prefetch_related()` | `selectinload()` |
 | `transaction.atomic()` | `async with session.begin():` in the service layer |
@@ -104,11 +106,17 @@ erDiagram
     USERS {
         int id PK
         string email UK "lower-case"
-        string username UK
+        string username UK "max 150"
+        string first_name
+        string last_name
         string hashed_password "used from Module 7"
-        bool is_premium "default false"
+        bool is_active "default true"
+        bool is_staff "default false"
+        bool is_superuser "default false"
+        timestamptz last_login "nullable"
+        bool is_premium "always matches tier"
         enum tier "free | premium | admin"
-        timestamptz created_at
+        timestamptz created_at "= date_joined"
         timestamptz updated_at
     }
     URLS {
@@ -133,7 +141,7 @@ erDiagram
         timestamptz clicked_at "set by the database"
         inet ip_address "nullable"
         text user_agent "nullable"
-        text referrer "nullable"
+        text referrer "http(s) URL or null"
         string country "ISO code, nullable"
         string city "nullable"
     }
@@ -151,6 +159,14 @@ erDiagram
 
 Deleting a user removes their URLs, clicks and tag links in one statement (`ON DELETE CASCADE`);
 tags are shared and stay.
+
+- **`tier`** works like Django choices: the stored value is `free` / `premium` / `admin`, the
+  label is `Free` / `Premium` / `Admin` (`UserTier.label`).
+- **`is_premium` always matches `tier`** (premium and admin are premium): setting the tier
+  updates it automatically, and a database CHECK rule refuses any contradiction.
+- **`date_joined`** is Django's name for `created_at` (the same column).
+- **Click fields:** `ip_address` and `user_agent` can be empty because some clients send no
+  address or header; `referrer` is stored only when it is a valid http(s) URL.
 
 **Indexes**
 
@@ -198,8 +214,9 @@ alembic upgrade head                  # create the tables
 uvicorn app.main:app --reload
 ```
 
-Paths have **no trailing slash** (`/api/v1/urls`, `/{short_code}`). A request with a trailing
-slash receives a `307` redirect to the canonical path (method and body are kept).
+Every endpoint answers on the specification's path **with** a trailing slash
+(`/api/v1/urls/`, `/{short_code}/`) and also **without** it (`/api/v1/urls`, `/{short_code}`),
+with no redirect. Swagger shows the paths with the slash.
 
 ## Configuration
 
@@ -243,6 +260,8 @@ alembic current / alembic history / alembic check    # where am I / the chain / 
 | `5de473cbc932` | seed default tags (Marketing, Social, Email, Ads, Events, Personal) | data |
 | `2b62d0fc3bea` | add `deleted_at` to urls (soft delete) | schema |
 | `0109315884f6` | list index on `(owner_id, created_at, id)` | schema |
+| `82a55000dc8d` | add the remaining `AbstractUser` fields to users | schema |
+| `dfe41766eb04` | repair rows, then keep `is_premium` in sync with `tier` (CHECK) | data + schema |
 
 Rules followed:
 
@@ -284,18 +303,20 @@ Interactive documentation: **`/docs`** (Swagger UI) and `/openapi.json`.
 | Method | Path | Success | Errors |
 |---|---|---|---|
 | `GET` | `/health` | 200 | 503 |
-| `POST` | `/api/v1/urls` | 201 | 409, 422 |
-| `GET` | `/api/v1/urls` | 200 | 400, 422 |
-| `GET` | `/api/v1/urls/{short_code}` | 200 | 404, 422 |
-| `PUT` | `/api/v1/urls/{short_code}` | 200 | 404, 422 |
-| `DELETE` | `/api/v1/urls/{short_code}` | 204 | 404, 422 |
-| `GET` | `/api/v1/analytics/{short_code}` | 200 | 404, 422 |
-| `GET` | `/{short_code}` | 302 | 404, 410, 422 |
+| `POST` | `/api/v1/urls/` | 201 | 409, 422 |
+| `GET` | `/api/v1/urls/` | 200 | 400, 422 |
+| `GET` | `/api/v1/urls/{short_code}/` | 200 | 404, 422 |
+| `PUT` | `/api/v1/urls/{short_code}/` | 200 | 404, 422 |
+| `DELETE` | `/api/v1/urls/{short_code}/` | 204 | 404, 422 |
+| `GET` | `/api/v1/analytics/{short_code}/` | 200 | 404, 422 |
+| `GET` | `/{short_code}/` | 302 | 404, 410, 422 |
+
+All paths also work without the final slash.
 
 ### Create a short URL
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/urls \
+curl -X POST http://localhost:8000/api/v1/urls/ \
   -H "Content-Type: application/json" \
   -d '{"original_url": "https://www.python.org/about/", "custom_alias": "py-about",
        "expires_at": "2027-01-31T23:59:59Z", "tags": ["Marketing", "Social"]}'
@@ -312,7 +333,7 @@ The response contains the owner, tags, `click_count` and `short_url`.
 ### List your URLs (keyset pagination)
 
 ```bash
-curl "http://localhost:8000/api/v1/urls?limit=20&sort=newest&tag=marketing&search=python"
+curl "http://localhost:8000/api/v1/urls/?limit=20&sort=newest&tag=marketing&search=python"
 # next page: add &cursor=<next_cursor from the previous response>
 ```
 
@@ -340,7 +361,7 @@ applied when given. A broken cursor, or one from another sort order, returns `40
 ### Analytics
 
 ```bash
-curl "http://localhost:8000/api/v1/analytics/py-about?days=30"
+curl "http://localhost:8000/api/v1/analytics/py-about/?days=30"
 ```
 
 Returns `total_clicks`, `unique_visitors` (distinct IP addresses, an estimate),
@@ -459,6 +480,10 @@ deliberately **not** indexed: it changes on every click, so an index would slow 
 someone could register it again for a different target (link hijacking). Soft delete keeps the
 code reserved and the click history; deleting a whole user still removes everything (cascade).
 
+**Managers.** `URL.objects.active_urls()`, `.expired_urls()` and `.popular_urls()` return
+composable `select()` statements, like a Django `Manager`; the repositories reuse them, so each
+rule exists once.
+
 **Active vs expired.** A link expiring exactly now counts as expired (`expires_at <= now`), so
 no link is ever in both lists or in neither. The rule is written once as a hybrid method
 (`URL.is_live()`) and used both in Python and in SQL.
@@ -469,8 +494,9 @@ under concurrency); a unique violation becomes a clean `409`.
 **Cache-aside and read replica.** Both are optional and degrade gracefully: without Redis the
 app reads the database; without a replica it reads the primary.
 
-**No trailing slash.** FastAPI's convention and the shortest possible links; a trailing slash
-is redirected with `307`.
+**Paths with and without the trailing slash.** The specification uses Django-style paths
+ending in `/`; short links are shortest without it. Both forms are served directly (no
+redirect), and Swagger documents the specification's form.
 
 ## Project structure
 
@@ -491,7 +517,7 @@ app/
 ├── scripts/                # seed.py, explain.py (python -m app.scripts.<name>)
 ├── services/               # URL, redirect and analytics services (transactions live here)
 └── utils/codes.py          # random short codes
-alembic/                    # env.py + versions/ (7 migrations)
+alembic/                    # env.py + versions/ (9 migrations)
 docker/                     # Postgres init scripts (test database, replication), replica start script
 tests/                      # 288 tests
 Dockerfile, docker-compose.yml, docker-compose.prod.yml, gunicorn.conf.py

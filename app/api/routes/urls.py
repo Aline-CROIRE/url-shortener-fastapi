@@ -20,6 +20,10 @@ from app.schemas.url import URLCreate, URLPage, URLRead, URLUpdate
 
 router = APIRouter(prefix="/urls", tags=["URLs"])
 
+# Every endpoint answers on the specification's path WITH a trailing slash
+# ("/api/v1/urls/", documented in Swagger) and on the same path WITHOUT it
+# (hidden alias, kept for Module 5 links and existing clients). Neither redirects.
+
 CREATE_EXAMPLES = {
     "minimal": {
         "summary": "Only the long URL",
@@ -47,8 +51,9 @@ def to_url_read(url: URL, settings: Settings) -> URLRead:
     return URLRead.model_validate(url, context={"base_url": settings.base_url})
 
 
+@router.post("", status_code=status.HTTP_201_CREATED, include_in_schema=False)
 @router.post(
-    "",
+    "/",
     status_code=status.HTTP_201_CREATED,
     summary="Create a short URL",
     description="URL and tags are saved in one transaction. A custom alias becomes the short code.",
@@ -64,8 +69,9 @@ async def create_url(
     return to_url_read(url, settings)
 
 
+@router.get("", include_in_schema=False)
 @router.get(
-    "",
+    "/",
     summary="List your short URLs",
     description=(
         "Keyset (cursor) pagination: pass `next_cursor` from one page as `cursor` to get "
@@ -94,8 +100,9 @@ async def list_urls(
     return URLPage(items=[to_url_read(url, settings) for url in urls], next_cursor=next_cursor)
 
 
+@router.get("/{short_code}", include_in_schema=False)
 @router.get(
-    "/{short_code}",
+    "/{short_code}/",
     summary="Get one of your short URLs",
     description="With its owner, tags and click count. Does not count as a visit.",
     responses={**NOT_FOUND, **VALIDATION_ERROR, **INTERNAL_ERROR},
@@ -110,8 +117,9 @@ async def get_url(
     return to_url_read(url, settings)
 
 
+@router.put("/{short_code}", include_in_schema=False)
 @router.put(
-    "/{short_code}",
+    "/{short_code}/",
     summary="Update one of your short URLs",
     description=(
         "Only the fields you send are changed; `tags` replaces all tags. "
@@ -130,8 +138,9 @@ async def update_url(
     return to_url_read(url, settings)
 
 
+@router.delete("/{short_code}", status_code=status.HTTP_204_NO_CONTENT, include_in_schema=False)
 @router.delete(
-    "/{short_code}",
+    "/{short_code}/",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete one of your short URLs",
     description=(

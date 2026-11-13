@@ -64,22 +64,20 @@ class URLRepository:
 
     @staticmethod
     def active_urls(now: datetime | None = None) -> Select[tuple[URL]]:
-        """Switched on AND (no expiry OR expiry still in the future)."""
-        return select(URL).where(URL.is_live(now or utc_now()))
+        """Switched on AND (no expiry OR expiry still in the future). See URL.objects."""
+        return URL.objects.active_urls(now or utc_now())
 
     @staticmethod
     def expired_urls(now: datetime | None = None) -> Select[tuple[URL]]:
         """Expiry reached. "<=" (not "<"): a URL expiring exactly now is expired,
-        so no URL falls between active_urls() and expired_urls().
+        so no URL falls between active_urls() and expired_urls(). See URL.objects.
         """
-        return select(URL).where(URL.is_expired(now or utc_now()))
+        return URL.objects.expired_urls(now or utc_now())
 
     @staticmethod
     def popular_urls(limit: int = 10) -> Select[tuple[URL]]:
         """Most clicked first; id breaks ties so the order is always the same."""
-        if not 1 <= limit <= MAX_LIMIT:
-            raise ValueError(f"limit must be between 1 and {MAX_LIMIT}")
-        return select(URL).order_by(URL.click_count.desc(), URL.id).limit(limit)
+        return URL.objects.popular_urls(limit)
 
     @staticmethod
     def list_owned(

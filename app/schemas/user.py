@@ -12,7 +12,9 @@ class UserCreate(BaseModel):
     """What a client sends to create a user (registration arrives in Module 7)."""
 
     email: EmailStr = Field(examples=["aline@example.com"])
-    username: str = Field(min_length=3, max_length=50, pattern=USERNAME_PATTERN, examples=["aline"])
+    username: str = Field(min_length=3, max_length=150, pattern=USERNAME_PATTERN, examples=["aline"])
+    first_name: str = Field(default="", max_length=150)
+    last_name: str = Field(default="", max_length=150)
     # SecretStr prints as '**********', so the password never leaks into logs.
     # It is hashed in Module 7; only the hash is stored (users.hashed_password).
     password: SecretStr = Field(min_length=8, max_length=128)
@@ -30,6 +32,9 @@ class UserRead(ORMModel):
     id: int
     email: EmailStr
     username: str
+    first_name: str
+    last_name: str
+    is_active: bool
     is_premium: bool
     tier: UserTier
     created_at: datetime
