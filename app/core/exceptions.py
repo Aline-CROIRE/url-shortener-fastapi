@@ -88,6 +88,22 @@ class InvalidCursorError(AppError):
     message = "The cursor is not valid. Start again without a cursor."
 
 
+class NotAuthenticatedError(AppError):
+    """Raised when an endpoint needs a logged-in user and there is none (401)."""
+
+    status_code = 401
+    code = "not_authenticated"
+    message = "Log in first: POST /api/v1/auth/login/."
+
+
+class InvalidCredentialsError(AppError):
+    """Raised when login fails; the same message for an unknown email or a wrong password (401)."""
+
+    status_code = 401
+    code = "invalid_credentials"
+    message = "The email or password is wrong."
+
+
 class ShortCodeGenerationError(AppError):
     """Raised when no unique short code could be generated (500 Internal Server Error)."""
 
