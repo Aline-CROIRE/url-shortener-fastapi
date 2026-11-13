@@ -9,8 +9,15 @@ from app.api.visitor import visitor_from_request
 router = APIRouter(tags=["Redirect"])
 
 
+# "/{short_code}/" (specification, documented) and "/{short_code}" (the shortest link)
 @router.get(
     "/{short_code}",
+    status_code=status.HTTP_302_FOUND,
+    response_class=RedirectResponse,
+    include_in_schema=False,
+)
+@router.get(
+    "/{short_code}/",
     summary="Redirect to the original URL",
     description=(
         "Only active, non-expired links redirect; each visit is recorded. "

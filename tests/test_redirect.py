@@ -87,13 +87,14 @@ def test_custom_alias_redirects(db_client: TestClient, run_db: RunDb) -> None:
     assert response.headers["location"] == TARGET
 
 
-def test_trailing_slash_redirects_to_the_canonical_path(db_client: TestClient, run_db: RunDb) -> None:
+def test_trailing_slash_path_redirects_directly(db_client: TestClient, run_db: RunDb) -> None:
+    # "/{short_code}/" is the specification's path: served directly, no 307 first
     code = seed_url(run_db)
 
     response = db_client.get(f"/{code}/")
 
-    assert response.status_code == 307  # FastAPI's redirect_slashes
-    assert response.headers["location"].endswith(f"/{code}")
+    assert response.status_code == 302
+    assert response.headers["location"] == TARGET
 
 
 # ---------- 404 and 410 ----------
