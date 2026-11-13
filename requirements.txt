@@ -19,6 +19,13 @@ opentelemetry-api==1.45.2
 anyio==4.16.0
 idna==3.20
 
+# Security: Argon2id password hashing, signed session cookies
+argon2-cffi==25.1.0
+argon2-cffi-bindings==26.2.0
+cffi==2.1.1
+pycparser==3.12
+itsdangerous==2.2.0
+
 # Cache: Redis (cache-aside for redirects)
 redis==8.1.0
 

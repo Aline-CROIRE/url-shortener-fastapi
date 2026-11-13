@@ -1,10 +1,14 @@
 """App settings, read from environment variables and the .env file."""
 
 from functools import lru_cache
-from typing import Literal
+from typing import Literal, Self
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Only for development and tests. Production refuses to start with it (see below).
+DEV_SECRET_KEY = "dev-only-secret-key-change-me-in-production"
+MIN_SECRET_KEY_LENGTH = 32
 
 
 class Settings(BaseSettings):
@@ -36,6 +40,28 @@ class Settings(BaseSettings):
     cache_ttl_seconds: int = Field(default=900, ge=1)
     # Number of Gunicorn worker processes in production (see gunicorn.conf.py)
     workers: int = Field(default=2, ge=1)
+    # Signs the login cookie so nobody can change it. A long random secret in production
+    secret_key: str = DEV_SECRET_KEY
+    # How long a login lasts (1 day)
+    session_max_age_seconds: int = Field(default=86_400, ge=60)
+    # True = the login cookie is only sent over HTTPS (turn on behind HTTPS in production)
+    session_https_only: bool = False
+
+    @model_validator(mode="after")
+    def check_production_secret_key(self) -> Self:
+        """Refuse to start in production with the development or a too-short secret key.
+
+        Raises:
+            ValueError: If ENVIRONMENT is production and SECRET_KEY is not a real secret.
+        """
+        if self.environment == "production" and (
+            self.secret_key == DEV_SECRET_KEY or len(self.secret_key) < MIN_SECRET_KEY_LENGTH
+        ):
+            raise ValueError(
+                f"Set SECRET_KEY to a random string of at least {MIN_SECRET_KEY_LENGTH} "
+                "characters in production"
+            )
+        return self
 
 
 @lru_cache
