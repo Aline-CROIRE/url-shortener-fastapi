@@ -120,7 +120,8 @@ def test_reset_removes_only_seeded_data(run_db: RunDb) -> None:
 
 
 def test_refuses_to_run_in_production(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(seed_module, "get_settings", lambda: Settings(environment="production"))
+    production = Settings(environment="production", secret_key="x" * 40)
+    monkeypatch.setattr(seed_module, "get_settings", lambda: production)
 
     with pytest.raises(SystemExit, match="production"):
         seed_module.main([])
