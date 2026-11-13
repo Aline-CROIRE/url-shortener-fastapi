@@ -1,3 +1,5 @@
+"""Reusable OpenAPI error responses, so Swagger shows the real error shape."""
+
 from typing import Any
 
 from fastapi import status

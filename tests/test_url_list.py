@@ -111,7 +111,10 @@ def test_most_clicked_pages_with_ties(db_client: TestClient, owner_id: int, run_
     clicks = [3, 1, 3, 0, 2, 3, 1, 0, 2, 5]
     created = seed(run_db, owner_id, *[{"click_count": c} for c in clicks])
     expected = [
-        code for _, _, code in sorted(zip(clicks, range(len(clicks)), created), reverse=True)
+        code
+        for _, _, code in sorted(
+            zip(clicks, range(len(clicks)), created, strict=True), reverse=True
+        )
     ]  # click_count DESC, then id DESC
 
     codes, _ = page_through(db_client, limit=3, sort="most_clicked")
@@ -162,7 +165,9 @@ def test_items_include_owner_and_tags(db_client: TestClient, owner_id: int, run_
 def test_only_my_not_deleted_urls_are_listed(
     db_client: TestClient, owner_id: int, run_db: RunDb
 ) -> None:
-    mine = seed(run_db, owner_id, {"short_code": "mine1"}, {"short_code": "gone1", "deleted_at": NOW})
+    mine = seed(
+        run_db, owner_id, {"short_code": "mine1"}, {"short_code": "gone1", "deleted_at": NOW}
+    )
 
     async def other_owner(session: AsyncSession) -> int:
         stranger = User(email="stranger@example.com", username="stranger", hashed_password="h")
@@ -259,7 +264,7 @@ def test_filters_are_combined(db_client: TestClient, owner_id: int, run_db: RunD
 def test_filters_work_with_pagination(db_client: TestClient, owner_id: int, run_db: RunDb) -> None:
     rows = [{"tags": ["Ads"]} if i % 2 == 0 else {} for i in range(10)]
     created = seed(run_db, owner_id, *rows)
-    tagged = [code for code, row in zip(created, rows) if row]
+    tagged = [code for code, row in zip(created, rows, strict=True) if row]
 
     codes, pages = page_through(db_client, limit=2, tag="Ads")
 

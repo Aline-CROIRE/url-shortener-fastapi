@@ -1,3 +1,5 @@
+"""Errors the app raises on purpose; each one becomes a JSON error response."""
+
 from typing import Any
 
 
@@ -12,16 +14,25 @@ class AppError(Exception):
     message: str = "An application error occurred."
 
     def __init__(self, message: str | None = None, details: Any = None) -> None:
+        """Store the error message and extra details.
+
+        Args:
+            message: Text for the client. None keeps the class default.
+            details: Extra data sent in the "details" field of the error.
+        """
         self.message = message or self.message
         self.details = details
         super().__init__(self.message)
 
 
 class UrlNotFoundError(AppError):
+    """Raised when a short URL cannot be found (404 Not Found)."""
+
     status_code = 404
     code = "url_not_found"
 
     def __init__(self, short_code: str) -> None:
+        """Build the error for the given short code."""
         super().__init__(
             message=f"Short URL '{short_code}' was not found.",
             details={"short_code": short_code},
@@ -34,6 +45,13 @@ class UrlGoneError(AppError):
     status_code = 410
 
     def __init__(self, short_code: str, reason: str) -> None:
+        """Build the error for the given short code.
+
+        Args:
+            short_code: The short code that was asked for.
+            reason: Why it no longer redirects, "expired" or "inactive".
+                It becomes part of the error code.
+        """
         self.code = f"url_{reason}"  # "url_expired" or "url_inactive"
         super().__init__(
             message=f"Short URL '{short_code}' is {reason} and no longer redirects.",
@@ -50,9 +68,12 @@ class ConflictError(AppError):
 
 
 class AliasTakenError(ConflictError):
+    """Raised when a custom alias is already used (409 Conflict)."""
+
     code = "alias_taken"
 
     def __init__(self, alias: str) -> None:
+        """Build the error for the given alias."""
         super().__init__(
             message=f"The alias '{alias}' is already taken. Please choose another one.",
             details={"custom_alias": alias},
@@ -68,7 +89,8 @@ class InvalidCursorError(AppError):
 
 
 class ShortCodeGenerationError(AppError):
+    """Raised when no unique short code could be generated (500 Internal Server Error)."""
+
     status_code = 500
     code = "short_code_generation_failed"
     message = "Could not generate a unique short code. Please try again."
-

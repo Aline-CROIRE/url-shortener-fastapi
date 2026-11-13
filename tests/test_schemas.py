@@ -186,9 +186,7 @@ def test_click_read_turns_ip_text_into_an_ip_object() -> None:
 async def test_analytics_schemas_read_sql_rows(db_session: AsyncSession) -> None:
     # A real SQL row whose columns are named with .label(), like F2.5 will produce
     row = (
-        await db_session.execute(
-            select(literal("RW").label("country"), literal(4).label("clicks"))
-        )
+        await db_session.execute(select(literal("RW").label("country"), literal(4).label("clicks")))
     ).one()
 
     assert CountryCount.model_validate(row) == CountryCount(country="RW", clicks=4)

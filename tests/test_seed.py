@@ -54,7 +54,9 @@ def test_seed_inserts_the_requested_amounts(run_db: RunDb) -> None:
     report = run_seed(run_db)
 
     assert (report.users, report.urls, report.clicks) == (3, 40, 500)
-    assert query(run_db, f"SELECT count(*) FROM users WHERE email LIKE '%@{SEED_EMAIL_DOMAIN}'") == 3
+    assert (
+        query(run_db, f"SELECT count(*) FROM users WHERE email LIKE '%@{SEED_EMAIL_DOMAIN}'") == 3
+    )
     assert query(run_db, "SELECT count(*) FROM clicks") == 500
     assert query(run_db, "SELECT count(*) FROM url_tags") == report.url_tag_links
 
@@ -75,7 +77,8 @@ def test_clicks_never_happen_before_their_url_existed(run_db: RunDb) -> None:
 
     impossible = query(
         run_db,
-        "SELECT count(*) FROM clicks c JOIN urls u ON u.id = c.url_id WHERE c.clicked_at < u.created_at",
+        "SELECT count(*) FROM clicks c JOIN urls u ON u.id = c.url_id "
+        "WHERE c.clicked_at < u.created_at",
     )
     assert impossible == 0
 
@@ -151,7 +154,9 @@ class RepeatFirstCode(random.Random):
         super().__init__(seed)
         self.codes_made = 0
 
-    def choices(self, population: Any, weights: Any = None, *, cum_weights: Any = None, k: int = 1) -> list:
+    def choices(
+        self, population: Any, weights: Any = None, *, cum_weights: Any = None, k: int = 1
+    ) -> list:
         if population is seed_module.CODE_ALPHABET:
             self.codes_made += 1
             if self.codes_made <= 2:
@@ -162,7 +167,9 @@ class RepeatFirstCode(random.Random):
 def test_a_repeated_random_code_is_replaced(run_db: RunDb) -> None:
     async def work(session: AsyncSession) -> list[str]:
         rng = RepeatFirstCode(1)
-        await seed_database(await session.connection(), SeedCounts(users=1, urls=2, clicks=0), rng, now=NOW)
+        await seed_database(
+            await session.connection(), SeedCounts(users=1, urls=2, clicks=0), rng, now=NOW
+        )
         return list(await session.scalars(select(URL.short_code).order_by(URL.id)))
 
     codes = run_db(work)

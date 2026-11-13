@@ -4,13 +4,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from alembic import command
 from alembic.config import Config
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from alembic import command
 from app.api.owner import get_current_owner_id
 from app.core.config import Settings, get_settings
 from app.db.database import get_db, get_read_db
@@ -173,9 +173,9 @@ def query_counter(
 ) -> Callable[[], AbstractContextManager[QueryCounter]]:
     """Count the SQL statements sent while a block runs:
 
-        with query_counter() as counter:
-            db_client.get("/api/v1/urls")
-        assert counter.count <= 3, counter.statements
+    with query_counter() as counter:
+        db_client.get("/api/v1/urls")
+    assert counter.count <= 3, counter.statements
     """
     return lambda: count_queries(db_state["engine"])
 

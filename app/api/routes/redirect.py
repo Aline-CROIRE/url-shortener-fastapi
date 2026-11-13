@@ -1,3 +1,5 @@
+"""Endpoint that sends a visitor from a short code to the original URL."""
+
 from fastapi import APIRouter, Request, status
 from fastapi.responses import RedirectResponse
 
@@ -48,6 +50,7 @@ async def redirect_to_original(
     request: Request,
     service: RedirectServiceDep,
 ) -> RedirectResponse:
+    """Redirect to the original URL."""
     # 404 unknown, 410 deleted/switched off/expired; otherwise the visit is recorded
     target = await service.visit(short_code, visitor_from_request(request))
     return RedirectResponse(url=target, status_code=status.HTTP_302_FOUND)

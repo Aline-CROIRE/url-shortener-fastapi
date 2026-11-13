@@ -1,3 +1,5 @@
+"""Tag schemas and the reusable TagName type."""
+
 from typing import Annotated
 
 from pydantic import StringConstraints
@@ -14,5 +16,7 @@ TagName = Annotated[
 
 
 class TagRead(ORMModel):
+    """A tag (label) attached to a short URL."""
+
     id: int
     name: str

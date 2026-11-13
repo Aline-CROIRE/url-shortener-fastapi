@@ -39,7 +39,10 @@ CLICKS = [
 
 def as_dict(rows: list[dict[str, Any]], *keys: str) -> dict[Any, int]:
     """[{"country": "RW", "clicks": 4}, ...] -> {"RW": 4, ...} (order checked separately)."""
-    return {tuple(row[k] for k in keys) if len(keys) > 1 else row[keys[0]]: row["clicks"] for row in rows}
+    return {
+        tuple(row[k] for k in keys) if len(keys) > 1 else row[keys[0]]: row["clicks"]
+        for row in rows
+    }
 
 
 def assert_most_clicked_first(rows: list[dict[str, Any]]) -> None:
@@ -166,7 +169,9 @@ def test_day_does_not_depend_on_the_session_time_zone(run_db: RunDb, stats_code:
 
 def test_url_without_clicks(db_client: TestClient, run_db: RunDb, owner_id: int) -> None:
     async def work(session: AsyncSession) -> None:
-        session.add(URL(original_url="https://quiet.example/", short_code="quiet1", owner_id=owner_id))
+        session.add(
+            URL(original_url="https://quiet.example/", short_code="quiet1", owner_id=owner_id)
+        )
 
     run_db(work)
 

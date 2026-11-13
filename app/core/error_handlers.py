@@ -1,12 +1,16 @@
+"""Turn exceptions into JSON error responses that all share one shape."""
+
 import logging
+from collections.abc import Awaitable, Callable, Mapping
 from http import HTTPStatus
-from typing import Any
+from typing import Any, cast
 
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import IntegrityError
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.types import ExceptionHandler
 
 from app.core.exceptions import AppError, ConflictError
 from app.db.errors import unique_violation_constraint
@@ -19,7 +23,7 @@ def error_response(
     code: str,
     message: str,
     details: Any = None,
-    headers: dict[str, str] | None = None,
+    headers: Mapping[str, str] | None = None,
 ) -> JSONResponse:
     """Build the one error shape: {"error": {"code", "message", "details"}}."""
     return JSONResponse(
@@ -30,10 +34,12 @@ def error_response(
 
 
 async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
+    """Return the JSON error for one of our own AppError exceptions."""
     return error_response(exc.status_code, exc.code, exc.message, exc.details)
 
 
 async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+    """Return HTTP errors (like 404 or 405) in our JSON error shape."""
     # Also catches FastAPI's own 404 (unknown route) and 405 (wrong method)
     phrase = HTTPStatus(exc.status_code).phrase  # e.g. "Not Found"
     code = phrase.lower().replace(" ", "_").replace("-", "_")  # e.g. "not_found"
@@ -44,6 +50,7 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException) 
 async def validation_exception_handler(
     request: Request, exc: RequestValidationError
 ) -> JSONResponse:
+    """Return validation errors as a 422 with one entry per bad field."""
     details = [
         {
             "field": ".".join(str(part) for part in error["loc"]),
@@ -61,7 +68,10 @@ async def validation_exception_handler(
 
 
 async def integrity_error_handler(request: Request, exc: IntegrityError) -> JSONResponse:
-    """Duplicate unique value -> clean 409. Any other constraint error is a bug -> 500."""
+    """Turn a duplicate unique value into a clean 409.
+
+    Any other constraint error is a bug, so it becomes a 500.
+    """
     # Thanks to our naming convention the name is readable, e.g. "uq_users_email"
     constraint = unique_violation_constraint(exc)
     if constraint is None:
@@ -71,6 +81,7 @@ async def integrity_error_handler(request: Request, exc: IntegrityError) -> JSON
 
 
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Log an unexpected error and return a general 500 without details."""
     # Full stack trace goes to the server log only, never to the client
     logger.exception("Unhandled error on %s %s", request.method, request.url.path)
     request_id = getattr(request.state, "request_id", None)
@@ -83,8 +94,15 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 
 
 def register_exception_handlers(app: FastAPI) -> None:
-    app.add_exception_handler(AppError, app_error_handler)
-    app.add_exception_handler(StarletteHTTPException, http_exception_handler)
-    app.add_exception_handler(RequestValidationError, validation_exception_handler)
-    app.add_exception_handler(IntegrityError, integrity_error_handler)
-    app.add_exception_handler(Exception, unhandled_exception_handler)
+    """Register all error handlers on the app."""
+    handlers: list[tuple[type[Exception], Callable[..., Awaitable[JSONResponse]]]] = [
+        (AppError, app_error_handler),
+        (StarletteHTTPException, http_exception_handler),
+        (RequestValidationError, validation_exception_handler),
+        (IntegrityError, integrity_error_handler),
+        (Exception, unhandled_exception_handler),
+    ]
+    for exception_class, handler in handlers:
+        # Starlette types a handler as accepting ANY Exception; ours accept the
+        # specific class they are registered for, which is what Starlette passes.
+        app.add_exception_handler(exception_class, cast(ExceptionHandler, handler))

@@ -1,10 +1,13 @@
+"""Database access for short URLs: list queries, lookups and click counting."""
+
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
+from typing import Any
 
-from sqlalchemy import Select, exists, func, or_, select, tuple_, update
+from sqlalchemy import Select, exists, func, literal, or_, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import joinedload, selectinload
+from sqlalchemy.orm import InstrumentedAttribute, joinedload, selectinload
 
 from app.models import URL, Tag
 
@@ -22,10 +25,13 @@ CursorPosition = tuple[datetime | int, int]
 
 
 def utc_now() -> datetime:
+    """Return the current time in UTC."""
     return datetime.now(UTC)
 
 
 class URLSort(StrEnum):
+    """The ways a URL list can be sorted."""
+
     NEWEST = "newest"  # created_at DESC, id DESC
     MOST_CLICKED = "most_clicked"  # click_count DESC, id DESC
 
@@ -41,11 +47,12 @@ class URLFilters:
 
 
 def escape_like(text: str) -> str:
-    """Make %, _ and \\ in user input match literally inside LIKE / ILIKE."""
+    r"""Make %, _ and \ in user input match literally inside LIKE / ILIKE."""
     return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
-def sort_column(sort: URLSort):  # noqa: ANN201 (a SQLAlchemy column)
+def sort_column(sort: URLSort) -> InstrumentedAttribute[Any]:
+    """Return the column a URL list is sorted by for this sort choice."""
     return URL.created_at if sort is URLSort.NEWEST else URL.click_count
 
 
@@ -58,6 +65,7 @@ class URLRepository:
     """
 
     def __init__(self, session: AsyncSession) -> None:
+        """Keep the session used for every query."""
         self._session = session
 
     # ---------- composable statements (nothing is sent to the database yet) ----------
@@ -69,8 +77,10 @@ class URLRepository:
 
     @staticmethod
     def expired_urls(now: datetime | None = None) -> Select[tuple[URL]]:
-        """Expiry reached. "<=" (not "<"): a URL expiring exactly now is expired,
-        so no URL falls between active_urls() and expired_urls(). See URL.objects.
+        """Return a statement for URLs whose expiry is reached.
+
+        "<=" (not "<"): a URL expiring exactly now is expired, so no URL falls
+        between active_urls() and expired_urls(). See URL.objects.
         """
         return URL.objects.expired_urls(now or utc_now())
 
@@ -121,29 +131,36 @@ class URLRepository:
         column = sort_column(sort)
         if after is not None:
             after_value, after_id = after
-            statement = statement.where(tuple_(column, URL.id) < tuple_(after_value, after_id))
+            bookmark = tuple_(literal(after_value), literal(after_id))  # sent as bind values
+            statement = statement.where(tuple_(column, URL.id) < bookmark)
 
         return statement.order_by(column.desc(), URL.id.desc()).options(*WITH_OWNER_AND_TAGS)
 
     # ---------- running statements ----------
 
     async def fetch_all(self, statement: Select[tuple[URL]]) -> list[URL]:
+        """Run the statement and return every URL it finds."""
         return list(await self._session.scalars(statement))
 
     async def fetch_first(self, statement: Select[tuple[URL]]) -> URL | None:
+        """Run the statement and return the first URL, or None."""
         return (await self._session.scalars(statement)).first()
 
     # ---------- single URLs ----------
 
     async def get(self, url_id: int) -> URL | None:
+        """Return the URL with this id, or None."""
         return await self._session.get(URL, url_id)
 
     async def get_by_short_code(self, short_code: str) -> URL | None:
+        """Return the URL with this short code (deleted ones too), or None."""
         return await self._session.scalar(select(URL).where(URL.short_code == short_code))
 
     async def get_owned(self, short_code: str, owner_id: int) -> URL | None:
-        """One NOT deleted URL of this owner, with owner and tags already loaded
-        (async code cannot lazy-load them later). Someone else's URL -> None.
+        """Return one NOT deleted URL of this owner, with owner and tags loaded.
+
+        They are loaded now because async code cannot lazy-load them later.
+        Someone else's URL -> None.
         """
         return await self._session.scalar(
             select(URL)
@@ -166,12 +183,14 @@ class URLRepository:
         )
 
     async def short_code_exists(self, short_code: str) -> bool:
+        """Return True if any URL already uses this short code."""
         # SELECT EXISTS(...): Postgres stops at the first match, no row is loaded
         return bool(
             await self._session.scalar(select(exists().where(URL.short_code == short_code)))
         )
 
     async def add(self, url: URL) -> URL:
+        """Add the URL and flush so its id is filled in (no commit)."""
         self._session.add(url)
         await self._session.flush()
         return url

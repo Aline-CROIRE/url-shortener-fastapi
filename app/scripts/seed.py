@@ -33,8 +33,16 @@ BATCH_SIZE = 5_000  # rows per INSERT statement
 CODE_ALPHABET = string.ascii_letters + string.digits
 
 # (value, weight): weights make the data look real (most clicks from a few places)
-COUNTRIES = [("RW", 30), ("GH", 20), ("NG", 15), ("KE", 10), ("US", 10), ("FR", 5), (None, 10)]
-CITIES = {
+COUNTRIES: list[tuple[str | None, int]] = [
+    ("RW", 30),
+    ("GH", 20),
+    ("NG", 15),
+    ("KE", 10),
+    ("US", 10),
+    ("FR", 5),
+    (None, 10),
+]
+CITIES: dict[str | None, list[str | None]] = {
     "RW": ["Kigali", "Huye", "Musanze"],
     "GH": ["Accra", "Kumasi"],
     "NG": ["Lagos", "Abuja"],
@@ -43,7 +51,7 @@ CITIES = {
     "FR": ["Paris", "Lyon"],
     None: [None],
 }
-REFERRERS = [
+REFERRERS: list[tuple[str | None, int]] = [
     ("https://twitter.com/", 30),
     ("https://www.google.com/", 25),
     ("https://www.facebook.com/", 15),
@@ -61,6 +69,8 @@ USER_AGENTS = [
 
 @dataclass(frozen=True)
 class SeedCounts:
+    """How many users, URLs and clicks to create."""
+
     users: int = 50
     urls: int = 10_000
     clicks: int = 200_000
@@ -68,31 +78,39 @@ class SeedCounts:
 
 @dataclass(frozen=True)
 class SeedReport:
+    """How many rows the seed actually inserted."""
+
     users: int
     urls: int
     clicks: int
     url_tag_links: int
 
 
-def batches(rows: Sequence[dict[str, Any]], size: int = BATCH_SIZE) -> Iterator[Sequence[dict[str, Any]]]:
+def batches(
+    rows: Sequence[dict[str, Any]], size: int = BATCH_SIZE
+) -> Iterator[Sequence[dict[str, Any]]]:
+    """Yield the rows in chunks of at most size rows (one INSERT per chunk)."""
     for start in range(0, len(rows), size):
         yield rows[start : start + size]
 
 
 def weighted(rng: random.Random, choices: list[tuple[Any, int]]) -> Any:
-    values, weights = zip(*choices)
+    """Pick one value from (value, weight) pairs; a bigger weight is picked more often."""
+    values, weights = zip(*choices, strict=True)
     return rng.choices(values, weights=weights)[0]
 
 
 def random_moment(rng: random.Random, start: datetime, end: datetime) -> datetime:
+    """Return a random moment between start and end."""
     return start + (end - start) * rng.random()
 
 
 async def reset_seeded_data(connection: AsyncConnection) -> int:
-    """Delete seeded users; ON DELETE CASCADE removes their URLs, clicks and tag links."""
-    result = await connection.execute(
-        delete(User).where(User.email.like(f"%@{SEED_EMAIL_DOMAIN}"))
-    )
+    """Delete the seeded users and return how many were removed.
+
+    ON DELETE CASCADE removes their URLs, clicks and tag links.
+    """
+    result = await connection.execute(delete(User).where(User.email.like(f"%@{SEED_EMAIL_DOMAIN}")))
     return result.rowcount
 
 
@@ -107,6 +125,9 @@ async def seed_database(
     Uses the caller's connection and transaction (it never commits), so the CLI
     commits once at the end and tests can roll everything back.
     Same rng seed -> same data.
+
+    Raises:
+        RuntimeError: If seed data already exists (run with --reset to replace it).
     """
     now = now or datetime.now(UTC)
     already_seeded = await connection.scalar(
@@ -140,7 +161,7 @@ async def seed_database(
 
     # ---- URLs ----
     existing_codes = set(await connection.scalars(select(URL.short_code)))
-    url_rows = []
+    url_rows: list[dict[str, Any]] = []
     for i in range(counts.urls):
         code = "".join(rng.choices(CODE_ALPHABET, k=7))
         while code in existing_codes:
@@ -183,8 +204,11 @@ async def seed_database(
         await connection.execute(insert(url_tags), chunk)
 
     # ---- clicks: never before the URL existed, within the last 90 days ----
-    visitor_ips = [f"41.{rng.randint(0, 255)}.{rng.randint(0, 255)}.{rng.randint(1, 254)}" for _ in range(5_000)]
-    click_rows = []
+    visitor_ips = [
+        f"41.{rng.randint(0, 255)}.{rng.randint(0, 255)}.{rng.randint(1, 254)}"
+        for _ in range(5_000)
+    ]
+    click_rows: list[dict[str, Any]] = []
     for url_index in click_targets:
         country = weighted(rng, COUNTRIES)
         first_possible = max(url_rows[url_index]["created_at"], now - timedelta(days=90))
@@ -208,6 +232,7 @@ async def seed_database(
 
 
 async def run(counts: SeedCounts, seed: int, reset: bool) -> None:
+    """Seed the database in one transaction, then refresh the planner statistics."""
     settings = get_settings()
     engine = create_engine(settings.database_url)
     started = time.perf_counter()
@@ -230,6 +255,7 @@ async def run(counts: SeedCounts, seed: int, reset: bool) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
+    """Read the command-line options and run the seed (never in production)."""
     parser = argparse.ArgumentParser(description="Fill the database with fake data.")
     parser.add_argument("--users", type=int, default=SeedCounts.users)
     parser.add_argument("--urls", type=int, default=SeedCounts.urls)

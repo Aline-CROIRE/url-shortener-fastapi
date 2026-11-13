@@ -1,3 +1,5 @@
+"""Output schema for a recorded click."""
+
 from datetime import datetime
 
 from pydantic import IPvAnyAddress

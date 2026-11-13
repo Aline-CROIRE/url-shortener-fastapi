@@ -70,7 +70,10 @@ async def test_all_fields_are_stored(db_session: AsyncSession, url: URL) -> None
     )
 
     assert click.ip_address == IPv4Address("41.186.0.10")  # INET -> Python ip object
-    assert (click.user_agent, click.referrer) == ("Mozilla/5.0 (Linux; Android 14)", "https://twitter.com/")
+    assert (click.user_agent, click.referrer) == (
+        "Mozilla/5.0 (Linux; Android 14)",
+        "https://twitter.com/",
+    )
     assert (click.country, click.city) == ("RW", "Kigali")
 
 

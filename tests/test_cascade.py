@@ -26,7 +26,12 @@ async def world(db_session: AsyncSession) -> dict[str, Any]:
     shared, only_alice = Tag(name="Shared"), Tag(name="AliceOnly")
     alice = User(email="alice@example.com", username="alice", hashed_password="h")
     bob = User(email="bob@example.com", username="bob", hashed_password="h")
-    active = URL(original_url="https://a.example/", short_code="alice1", owner=alice, tags=[shared, only_alice])
+    active = URL(
+        original_url="https://a.example/",
+        short_code="alice1",
+        owner=alice,
+        tags=[shared, only_alice],
+    )
     deleted = URL(  # soft-deleted, but still a row: it must go too
         original_url="https://a.example/old",
         short_code="alice2",
@@ -69,7 +74,9 @@ async def assert_only_alice_is_gone(session: AsyncSession, world: dict[str, Any]
     assert await count(session, url_tags, url_tags.c.url_id == world["bob_url_id"]) == 1
 
 
-async def test_before_deleting_everything_exists(db_session: AsyncSession, world: dict[str, Any]) -> None:
+async def test_before_deleting_everything_exists(
+    db_session: AsyncSession, world: dict[str, Any]
+) -> None:
     alice_urls = world["alice_url_ids"]
     assert await count(db_session, Click, Click.url_id.in_(alice_urls)) == 5
     assert await count(db_session, url_tags, url_tags.c.url_id.in_(alice_urls)) == 3

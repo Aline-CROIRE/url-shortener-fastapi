@@ -1,14 +1,19 @@
+"""App settings, read from environment variables and the .env file."""
+
 from functools import lru_cache
 from typing import Literal
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+
 class Settings(BaseSettings):
-    model_config=SettingsConfigDict(
+    """All app settings; each field can be set by an environment variable of the same name."""
+
+    model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
-
     )
     app_name: str = "URL Shortener"
     app_version: str = "0.1.0"
@@ -20,7 +25,9 @@ class Settings(BaseSettings):
     # Optional read-only replica for GET endpoints. Empty = reads use the primary
     database_replica_url: str = ""
     # A separate database used only by pytest, so tests never touch real data
-    test_database_url: str = "postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/url_shortener_test"
+    test_database_url: str = (
+        "postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/url_shortener_test"
+    )
     # True = print every SQL statement in the logs (handy for learning and debugging)
     db_echo: bool = False
     # Redis cache for redirects. Empty = no cache (the app works without Redis)
@@ -30,6 +37,8 @@ class Settings(BaseSettings):
     # Number of Gunicorn worker processes in production (see gunicorn.conf.py)
     workers: int = Field(default=2, ge=1)
 
-@lru_cache()
+
+@lru_cache
 def get_settings() -> Settings:
+    """Return the settings, created once and then reused."""
     return Settings()

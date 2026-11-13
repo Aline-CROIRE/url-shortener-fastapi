@@ -1,3 +1,5 @@
+"""The URL service: create, list, read, update and delete an owner's short URLs."""
+
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,6 +34,7 @@ class URLService:
         tags: TagRepository,
         cache: RedirectCache | None = None,
     ) -> None:
+        """Keep the session, repositories and cache (no cache -> a cache that stores nothing)."""
         self._session = session
         self._urls = urls
         self._users = users
@@ -39,10 +42,16 @@ class URLService:
         self._cache = cache or NullRedirectCache()
 
     async def create(self, data: URLCreate, owner_id: int) -> URL:
-        """Save the URL and its tags together. A chosen alias becomes the short code.
+        """Save the URL and its tags together.
 
-        No "does this code exist?" check first: the unique constraint is the real
-        guard (also when two requests race), so we try and react to its error.
+        A chosen alias becomes the short code. No "does this code exist?" check
+        first: the unique constraint is the real guard (also when two requests
+        race), so we try and react to its error.
+
+        Raises:
+            AliasTakenError: If the chosen alias is already used.
+            ShortCodeGenerationError: If no free random code was found after
+                MAX_CODE_ATTEMPTS tries.
         """
         attempts = 1 if data.custom_alias else MAX_CODE_ATTEMPTS
         for _ in range(attempts):
@@ -75,7 +84,11 @@ class URLService:
         limit: int,
         cursor: str | None = None,
     ) -> tuple[list[URL], str | None]:
-        """One page of the owner's URLs and the cursor of the next page (or None)."""
+        """Return one page of the owner's URLs and the cursor of the next page (or None).
+
+        Raises:
+            InvalidCursorError: If the cursor text is broken or belongs to another sort.
+        """
         after = decode_cursor(cursor, sort) if cursor else None
         statement = self._urls.list_owned(owner_id, filters, sort, after)
         # Ask for ONE extra row: if it exists, there is a next page (no COUNT(*) needed)
@@ -88,14 +101,24 @@ class URLService:
         return page, encode_cursor(sort, (value, last.id))
 
     async def get(self, short_code: str, owner_id: int) -> URL:
-        """Read only: no explicit transaction needed (get_db closes the session)."""
+        """Return one of the owner's URLs.
+
+        Read only: no explicit transaction needed (get_db closes the session).
+
+        Raises:
+            UrlNotFoundError: If the URL does not exist or is not the owner's.
+        """
         url = await self._urls.get_owned(short_code, owner_id)
         if url is None:
             raise UrlNotFoundError(short_code)
         return url
 
     async def update(self, short_code: str, owner_id: int, data: URLUpdate) -> URL:
-        """Change only the fields the client sent (partial update)."""
+        """Change only the fields the client sent (partial update).
+
+        Raises:
+            UrlNotFoundError: If the URL does not exist or is not the owner's.
+        """
         changes = data.model_dump(exclude_unset=True)
         async with self._session.begin():
             url = await self._urls.get_owned(short_code, owner_id)
@@ -119,7 +142,13 @@ class URLService:
         return url
 
     async def delete(self, short_code: str, owner_id: int) -> None:
-        """Soft delete: the row stays, so the code is never reused and clicks are kept."""
+        """Soft-delete the URL.
+
+        The row stays, so the code is never reused and clicks are kept.
+
+        Raises:
+            UrlNotFoundError: If the URL does not exist or is not the owner's.
+        """
         async with self._session.begin():
             url = await self._urls.get_owned(short_code, owner_id)
             if url is None:

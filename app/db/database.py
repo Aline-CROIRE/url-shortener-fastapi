@@ -1,3 +1,5 @@
+"""Engines, session factories and the FastAPI database session dependencies."""
+
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -21,7 +23,7 @@ def create_engine(database_url: str, echo: bool = False) -> AsyncEngine:
 
 
 def create_read_engine(primary: AsyncEngine, replica_url: str, echo: bool = False) -> AsyncEngine:
-    """The engine for READ-ONLY queries.
+    """Create the engine for READ-ONLY queries.
 
     - With a replica URL: its own pool, connected to the replica.
     - Without: a copy of the primary engine that SHARES its pool (no extra connections).
@@ -60,7 +62,9 @@ async def _session_scope(
 
 
 async def get_db(request: Request) -> AsyncIterator[AsyncSession]:
-    """FastAPI dependency: the WRITE session (primary database).
+    """Give a route the WRITE session (primary database).
+
+    This is a FastAPI dependency.
 
     The engines and sessionmakers are created once in the app lifespan (app/main.py).
     """
@@ -69,7 +73,9 @@ async def get_db(request: Request) -> AsyncIterator[AsyncSession]:
 
 
 async def get_read_db(request: Request) -> AsyncIterator[AsyncSession]:
-    """FastAPI dependency: the READ-ONLY session (replica if configured, else primary).
+    """Give a route the READ-ONLY session (replica if configured, else primary).
+
+    This is a FastAPI dependency.
 
     Use it for endpoints that only read. It may be slightly behind the primary
     (replication lag), so never read your own just-written data through it.

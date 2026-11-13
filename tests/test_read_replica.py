@@ -59,12 +59,16 @@ def test_endpoints_are_routed_to_the_right_database(
     # Reads -> the read-only session (the replica when configured)
     assert sessions_used(routing_log, lambda: db_client.get(API)) == {"read"}
     assert sessions_used(routing_log, lambda: db_client.get(f"{API}/{code}")) == {"read"}
-    assert sessions_used(routing_log, lambda: db_client.get(f"/api/v1/analytics/{code}")) == {"read"}
+    assert sessions_used(routing_log, lambda: db_client.get(f"/api/v1/analytics/{code}")) == {
+        "read"
+    }
 
     # Writes -> the primary. The redirect too: it records a click and must see
     # a link created a moment ago (no replication lag)
     assert sessions_used(routing_log, lambda: db_client.get(f"/{code}")) == {"write"}
-    assert sessions_used(routing_log, lambda: db_client.put(f"{API}/{code}", json={"title": "x"})) == {"write"}
+    assert sessions_used(
+        routing_log, lambda: db_client.put(f"{API}/{code}", json={"title": "x"})
+    ) == {"write"}
     assert sessions_used(routing_log, lambda: db_client.delete(f"{API}/{code}")) == {"write"}
 
 
@@ -90,7 +94,9 @@ def test_the_read_session_refuses_writes(client: TestClient) -> None:
 def test_without_a_replica_reads_share_the_primary_pool(client: TestClient) -> None:
     state = client.app.state
 
-    assert state.read_engine.sync_engine.pool is state.engine.sync_engine.pool  # no extra connections
+    assert (
+        state.read_engine.sync_engine.pool is state.engine.sync_engine.pool
+    )  # no extra connections
     assert state.read_engine.get_execution_options()["postgresql_readonly"] is True
 
 

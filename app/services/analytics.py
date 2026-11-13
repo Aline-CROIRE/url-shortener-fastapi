@@ -1,3 +1,5 @@
+"""The analytics service: click statistics for one short URL."""
+
 from datetime import datetime, time, timedelta
 
 from app.core.exceptions import UrlNotFoundError
@@ -13,7 +15,10 @@ from app.schemas.analytics import (
 
 
 def window_start(now: datetime, days: int) -> datetime:
-    """Midnight (UTC) at the start of the window: days=1 -> today, days=7 -> 6 days ago."""
+    """Return midnight (UTC) at the start of the window.
+
+    days=1 -> today, days=7 -> 6 days ago.
+    """
     today_midnight = datetime.combine(now.date(), time.min, tzinfo=now.tzinfo)
     return today_midnight - timedelta(days=days - 1)
 
@@ -27,12 +32,24 @@ class AnalyticsService:
     """
 
     def __init__(self, urls: URLRepository, clicks: ClickRepository) -> None:
+        """Keep the repositories the service reads from."""
         self._urls = urls
         self._clicks = clicks
 
     async def for_url(
         self, short_code: str, owner_id: int, days: int, now: datetime | None = None
     ) -> URLAnalytics:
+        """Build the analytics report of one of the owner's URLs.
+
+        Args:
+            short_code: The short code of the URL.
+            owner_id: The id of the user who must own the URL.
+            days: How many days the clicks_per_day list covers (today included).
+            now: The current time; tests pass a fixed value.
+
+        Raises:
+            UrlNotFoundError: If the URL does not exist, is someone else's, or is deleted.
+        """
         url_id = await self._urls.owned_url_id(short_code, owner_id)
         if url_id is None:  # unknown, someone else's, or deleted
             raise UrlNotFoundError(short_code)

@@ -1,3 +1,5 @@
+"""The redirect service: turn a short code into its original URL and record the click."""
+
 from dataclasses import dataclass
 from datetime import datetime
 from ipaddress import IPv4Address, IPv6Address
@@ -42,15 +44,20 @@ class RedirectService:
         clicks: ClickRepository,
         cache: RedirectCache | None = None,
     ) -> None:
+        """Keep the session, repositories and cache (no cache -> a cache that stores nothing)."""
         self._session = session
         self._urls = urls
         self._clicks = clicks
         self._cache = cache or NullRedirectCache()
 
-    async def visit(self, short_code: str, visitor: VisitorInfo, now: datetime | None = None) -> str:
+    async def visit(
+        self, short_code: str, visitor: VisitorInfo, now: datetime | None = None
+    ) -> str:
         """Record the click and return the original URL to redirect to.
 
-        Raises UrlNotFoundError (404) or UrlGoneError (410).
+        Raises:
+            UrlNotFoundError: If no URL has this short code (404).
+            UrlGoneError: If the URL is deleted, switched off or expired (410).
         """
         now = now or utc_now()
 
@@ -84,7 +91,7 @@ class RedirectService:
     async def _visit_cached(
         self, short_code: str, cached: CachedRedirect, visitor: VisitorInfo
     ) -> str | None:
-        """Record the click for a cached link; None if the cache was stale."""
+        """Record the click for a cached link; return None if the cache was stale."""
         try:
             async with self._session.begin():
                 await self._record_click(cached.url_id, visitor)
