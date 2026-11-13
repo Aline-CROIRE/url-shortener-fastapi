@@ -126,6 +126,14 @@ pytest                             # run all tests
 pytest --cov                       # with a coverage report
 ```
 
+Code quality (also run automatically on GitHub for every push):
+
+```bash
+ruff check .                       # lint, including docstrings
+ruff format --check .              # formatting
+mypy                               # type checking
+```
+
 ## Project structure
 
 ```
