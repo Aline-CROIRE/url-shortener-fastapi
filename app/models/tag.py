@@ -1,3 +1,5 @@
+"""The Tag model and the url_tags link table (many-to-many with URLs)."""
+
 from typing import TYPE_CHECKING
 
 from sqlalchemy import Column, ForeignKey, Index, String, Table, func
@@ -24,7 +26,7 @@ url_tags = Table(
 
 
 class Tag(TimestampMixin, Base):
-    """A label (e.g. "Marketing") shared by all users and attached to many URLs."""
+    """The tags table: a label (e.g. "Marketing") shared by all users and attached to many URLs."""
 
     __tablename__ = "tags"
 
@@ -40,6 +42,7 @@ class Tag(TimestampMixin, Base):
     )
 
     def __repr__(self) -> str:
+        """Return a short text form of the tag for logs and debugging."""
         return f"<Tag id={self.id} name={self.name!r}>"
 
 

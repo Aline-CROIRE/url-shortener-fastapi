@@ -1,3 +1,5 @@
+"""Database access for clicks, including the analytics queries."""
+
 from datetime import datetime
 from typing import Any
 
@@ -35,6 +37,7 @@ class ClickRepository:
     """
 
     def __init__(self, session: AsyncSession) -> None:
+        """Keep the session used for every query."""
         self._session = session
 
     @staticmethod
@@ -61,6 +64,7 @@ class ClickRepository:
 
     @staticmethod
     def per_country(url_id: int) -> Select[Any]:
+        """Return a statement counting clicks per country, most clicks first."""
         country = country_or_unknown.label("country")
         return (
             select(country, click_count)
@@ -71,6 +75,7 @@ class ClickRepository:
 
     @staticmethod
     def per_city(url_id: int) -> Select[Any]:
+        """Return a statement counting clicks per city and country, most clicks first."""
         # Grouped by city AND country: Paris (FR) and Paris (US) are different places
         city = city_or_unknown.label("city")
         country = country_or_unknown.label("country")
@@ -98,6 +103,10 @@ class ClickRepository:
 
     @staticmethod
     def top_referrers(url_id: int, limit: int = TOP_REFERRERS) -> Select[Any]:
+        """Return a statement for the sites visitors came from, most clicks first.
+
+        At most `limit` rows; no referrer is counted as "Direct".
+        """
         referrer = referrer_or_direct.label("referrer")
         return (
             select(referrer, click_count)
@@ -110,16 +119,24 @@ class ClickRepository:
     # ---------- running statements ----------
 
     async def fetch_all(self, statement: Select[tuple[Click]]) -> list[Click]:
+        """Run the statement and return every click it finds."""
         return list(await self._session.scalars(statement))
 
     async def fetch_rows(self, statement: Select[Any]) -> list[Row[Any]]:
-        """Result rows with named columns (row.country, row.clicks)."""
+        """Run the statement and return rows with named columns (row.country, row.clicks)."""
         return list(await self._session.execute(statement))
 
     async def fetch_one_row(self, statement: Select[Any]) -> Row[Any]:
+        """Run the statement and return its single result row.
+
+        Raises:
+            sqlalchemy.exc.NoResultFound: if there is no row.
+            sqlalchemy.exc.MultipleResultsFound: if there is more than one row.
+        """
         return (await self._session.execute(statement)).one()
 
     async def add(self, click: Click) -> Click:
+        """Add the click and flush so its id is filled in (no commit)."""
         self._session.add(click)
         await self._session.flush()
         return click

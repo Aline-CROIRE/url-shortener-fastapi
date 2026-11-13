@@ -18,6 +18,7 @@ from app.repositories.url import CursorPosition, URLSort
 
 
 def encode_cursor(sort: URLSort, position: CursorPosition) -> str:
+    """Turn the sort and the last row's (sort value, id) into URL-safe cursor text."""
     value, row_id = position
     payload = {
         "sort": sort.value,
@@ -28,7 +29,11 @@ def encode_cursor(sort: URLSort, position: CursorPosition) -> str:
 
 
 def decode_cursor(cursor: str, sort: URLSort) -> CursorPosition:
-    """Turn the text back into (sort value, id); any problem -> InvalidCursorError (400)."""
+    """Turn the cursor text back into (sort value, id).
+
+    Raises:
+        InvalidCursorError: If the cursor is broken or belongs to another sort (400).
+    """
     try:
         padded = cursor + "=" * (-len(cursor) % 4)
         payload: Any = json.loads(base64.urlsafe_b64decode(padded))

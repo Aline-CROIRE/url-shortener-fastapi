@@ -1,3 +1,5 @@
+"""The shared base class for output schemas."""
+
 from pydantic import BaseModel, ConfigDict
 
 

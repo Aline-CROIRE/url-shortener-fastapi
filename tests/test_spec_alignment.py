@@ -11,13 +11,13 @@ from collections.abc import Callable
 from typing import Any
 
 import pytest
-from alembic import command
 from fastapi.testclient import TestClient
 from sqlalchemy import select, text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from alembic import command
 from app.api.visitor import clean_referrer
 from app.core.config import get_settings
 from app.main import app as real_app
@@ -95,8 +95,12 @@ async def test_manager_queries_run_and_compose(db_session: AsyncSession) -> None
     )
     await db_session.flush()
 
-    live = (await db_session.scalars(URL.objects.active_urls().where(URL.owner_id == owner.id))).all()
-    top = (await db_session.scalars(URL.objects.popular_urls(1).where(URL.owner_id == owner.id))).all()
+    live = (
+        await db_session.scalars(URL.objects.active_urls().where(URL.owner_id == owner.id))
+    ).all()
+    top = (
+        await db_session.scalars(URL.objects.popular_urls(1).where(URL.owner_id == owner.id))
+    ).all()
 
     assert [u.short_code for u in live] == ["live01"]
     assert [u.short_code for u in top] == ["live01"]
@@ -184,7 +188,9 @@ def test_migration_repairs_old_contradicting_rows() -> None:
             )
         )
         command.upgrade(config, "head")  # repair, then add the rule
-        repaired = asyncio.run(run("SELECT is_premium FROM users WHERE email = 'old@x.com'", read=True))
+        repaired = asyncio.run(
+            run("SELECT is_premium FROM users WHERE email = 'old@x.com'", read=True)
+        )
         assert repaired is False
     finally:
         command.upgrade(config, "head")

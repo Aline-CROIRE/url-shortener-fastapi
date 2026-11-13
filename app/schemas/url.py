@@ -1,3 +1,5 @@
+"""Input and output schemas for short URLs."""
+
 from datetime import UTC, datetime
 from typing import Annotated, Self
 
@@ -28,6 +30,11 @@ MAX_TAGS_PER_URL = 10
 
 
 def check_in_future(expires_at: datetime) -> datetime:
+    """Return expires_at unchanged if it is in the future.
+
+    Raises:
+        ValueError: If expires_at is now or in the past.
+    """
     if expires_at <= datetime.now(UTC):
         raise ValueError("expires_at must be in the future")
     return expires_at
@@ -79,18 +86,21 @@ class URLCreate(BaseModel):
     @field_validator("custom_alias")
     @classmethod
     def alias_is_not_reserved(cls, alias: str | None) -> str | None:
+        """Refuse aliases that clash with the app's own paths (e.g. "docs", "api")."""
         if alias is not None and alias.lower() in RESERVED_ALIASES:
             raise ValueError(f"'{alias}' is reserved, please choose another alias")
         return alias
 
 
 class URLUpdate(BaseModel):
-    """Fields a client may change. Every field is optional: only the fields that
-    are SENT are changed (read them with model_dump(exclude_unset=True)).
+    """The fields a client may change on a short URL.
 
-    short_code and custom_alias are not here on purpose: changing them would
-    break links that people already shared.
+    Every field is optional: only the fields you send are changed. The short code
+    and alias cannot be changed, because links already shared would break.
     """
+
+    # (Developer note) The service reads only the sent fields with
+    # model_dump(exclude_unset=True).
 
     model_config = ConfigDict(extra="forbid")
 
@@ -106,6 +116,7 @@ class URLUpdate(BaseModel):
     @field_validator("original_url", "is_active", "tags")
     @classmethod
     def cannot_be_null(cls, value: object) -> object:
+        """Refuse an explicit null for fields whose columns can never be empty."""
         # Runs only for values the client SENT. "Not sent" is fine; an explicit
         # null is not, because these columns can never be empty.
         if value is None:
@@ -117,10 +128,10 @@ class URLUpdate(BaseModel):
 
 
 class URLRead(ORMModel):
-    """A short URL as the API shows it, with its owner and tags.
+    """A short URL with its owner, tags and click count."""
 
-    Build it with: URLRead.model_validate(url, context={"base_url": ...})
-    """
+    # (Developer note) Build it with URLRead.model_validate(url, context={"base_url": ...})
+    # so short_url can be filled in.
 
     id: int
     short_code: str
@@ -140,6 +151,11 @@ class URLRead(ORMModel):
 
     @model_validator(mode="after")
     def build_short_url(self, info: ValidationInfo) -> Self:
+        """Build short_url from the base_url passed in the validation context.
+
+        Raises:
+            ValueError: If no base_url was passed in the context.
+        """
         if self.short_url:
             # Already built: FastAPI validates the returned URLRead a second time
             # (without our context) before sending it; keep the value we made.
@@ -158,5 +174,7 @@ class URLPage(BaseModel):
     items: list[URLRead]
     next_cursor: str | None = Field(
         description="Send it as ?cursor=... to get the next page; null on the last page",
-        examples=["eyJzb3J0IjoibmV3ZXN0IiwidmFsdWVzIjpbIjIwMjYtMTEtMTJUMTA6MDA6MDArMDA6MDAiLDQyXX0"],
+        examples=[
+            "eyJzb3J0IjoibmV3ZXN0IiwidmFsdWVzIjpbIjIwMjYtMTEtMTJUMTA6MDA6MDArMDA6MDAiLDQyXX0"
+        ],
     )

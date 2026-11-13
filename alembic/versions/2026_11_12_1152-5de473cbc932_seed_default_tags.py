@@ -6,6 +6,7 @@ Create Date: 2026-11-12 11:52:13.295053
 
 A DATA migration: it adds rows, it does not change any table.
 """
+
 from typing import Sequence, Union
 
 from alembic import op
@@ -13,8 +14,8 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '5de473cbc932'
-down_revision: Union[str, Sequence[str], None] = 'f113c0993510'
+revision: str = "5de473cbc932"
+down_revision: Union[str, Sequence[str], None] = "f113c0993510"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

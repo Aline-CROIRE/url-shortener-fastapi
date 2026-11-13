@@ -4,6 +4,7 @@ The query counter listens to SQLAlchemy's "before_cursor_execute" event and coun
 every SQL statement (transaction bookkeeping like SAVEPOINT is not counted).
 """
 
+import re
 from collections.abc import Callable
 from itertools import count
 from typing import Any
@@ -33,9 +34,18 @@ def seed_urls(run_db: RunDb, n: int, owner_id: int | None = None) -> list[str]:
             code = f"b{batch}u{i}"
             if owner_id is None:
                 owner = User(email=f"{code}@x.test", username=code, hashed_password="!")
-                session.add(URL(original_url="https://x.test/", short_code=code, owner=owner, tags=tags))
+                session.add(
+                    URL(original_url="https://x.test/", short_code=code, owner=owner, tags=tags)
+                )
             else:
-                session.add(URL(original_url="https://x.test/", short_code=code, owner_id=owner_id, tags=tags))
+                session.add(
+                    URL(
+                        original_url="https://x.test/",
+                        short_code=code,
+                        owner_id=owner_id,
+                        tags=tags,
+                    )
+                )
             codes.append(code)
         return codes
 
@@ -160,7 +170,9 @@ def test_touching_an_unloaded_relationship_raises_a_clear_error(run_db: RunDb) -
         url = await session.scalar(select(URL).where(URL.short_code == code))  # no options
         _ = url.tags
 
-    with pytest.raises(InvalidRequestError, match="'URL.tags' is not available due to lazy='raise'"):
+    with pytest.raises(
+        InvalidRequestError, match=re.escape("'URL.tags' is not available due to lazy='raise'")
+    ):
         run_db(forget_to_load)
 
 

@@ -126,9 +126,7 @@ def test_taken_alias_returns_409(db_client: TestClient, owner_id: int, run_db: R
     assert count_rows(run_db, URL) == 1  # the failed attempt left nothing behind
 
 
-def test_alias_cannot_take_an_existing_random_code(
-    db_client: TestClient, owner_id: int
-) -> None:
+def test_alias_cannot_take_an_existing_random_code(db_client: TestClient, owner_id: int) -> None:
     random_code = create(db_client)["short_code"]
 
     response = db_client.post(API, json={"original_url": TARGET, "custom_alias": random_code})
@@ -305,7 +303,9 @@ def test_deleted_code_is_never_given_to_someone_else(db_client: TestClient, owne
     code = create(db_client, custom_alias="promo")["short_code"]
     db_client.delete(f"{API}/{code}")
 
-    response = db_client.post(API, json={"original_url": "https://evil.example/", "custom_alias": code})
+    response = db_client.post(
+        API, json={"original_url": "https://evil.example/", "custom_alias": code}
+    )
 
     assert response.status_code == 409  # no link hijacking
 
@@ -382,7 +382,9 @@ def test_other_unique_violations_during_create_are_not_called_alias_taken(
 
     monkeypatch.setattr(TagRepository, "get_or_create_many", clashing_tags)
 
-    response = db_client.post(API, json={"original_url": TARGET, "custom_alias": "fine1", "tags": ["X"]})
+    response = db_client.post(
+        API, json={"original_url": TARGET, "custom_alias": "fine1", "tags": ["X"]}
+    )
 
     assert response.status_code == 409
     assert error_code(response) == "conflict"  # the generic 409, NOT "alias_taken"

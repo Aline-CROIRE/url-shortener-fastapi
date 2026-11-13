@@ -1,3 +1,5 @@
+"""Build the FastAPI app: settings, logging, database, cache, middleware and routes."""
+
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -25,6 +27,12 @@ OPENAPI_TAGS = [
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
+    """Create and configure the FastAPI application.
+
+    Args:
+        settings: Settings to use. When None, they are read from the
+            environment and the .env file.
+    """
     settings = settings or get_settings()
     setup_logging(settings.debug)
 

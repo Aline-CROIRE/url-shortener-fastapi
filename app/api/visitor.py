@@ -1,3 +1,5 @@
+"""Read visitor details (IP address, user agent, referrer) from a request."""
+
 from ipaddress import IPv4Address, IPv6Address, ip_address
 from urllib.parse import urlsplit
 
@@ -10,7 +12,10 @@ MAX_REFERRER_LENGTH = 2048
 
 
 def parse_ip(value: str | None) -> IPv4Address | IPv6Address | None:
-    """A real IP address, or None (e.g. TestClient reports the host "testclient")."""
+    """Return a real IP address, or None.
+
+    For example, TestClient reports the host "testclient", which becomes None.
+    """
     if not value:
         return None
     try:
@@ -20,16 +25,20 @@ def parse_ip(value: str | None) -> IPv4Address | IPv6Address | None:
 
 
 def clip(value: str | None, max_length: int) -> str | None:
-    """Empty -> None; very long header values are cut so nobody can flood the DB."""
+    """Turn an empty value into None and cut a very long value.
+
+    Long header values are cut so nobody can flood the database.
+    """
     if not value:
         return None
     return value[:max_length]
 
 
 def clean_referrer(value: str | None) -> str | None:
-    """Keep the Referer header only when it is a real http(s) URL (like Django's
-    URLField); anything else ("", "android-app://...", random text) becomes None,
-    which analytics shows as "Direct".
+    """Keep the Referer header only when it is a real http(s) URL.
+
+    This works like Django's URLField. Anything else ("", "android-app://...",
+    random text) becomes None, which analytics shows as "Direct".
     """
     referrer = clip(value, MAX_REFERRER_LENGTH)
     if referrer is None:
@@ -44,6 +53,7 @@ def clean_referrer(value: str | None) -> str | None:
 
 
 def visitor_from_request(request: Request) -> VisitorInfo:
+    """Collect the visitor's IP address, user agent and referrer."""
     # request.client.host is the direct peer. Behind a reverse proxy, run Uvicorn
     # with --proxy-headers (and trusted --forwarded-allow-ips) so this becomes the
     # real visitor IP. Never read X-Forwarded-For yourself: anyone can fake it.

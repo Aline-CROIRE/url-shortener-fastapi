@@ -11,27 +11,37 @@ from app.schemas.base import ORMModel
 
 
 class CountryCount(ORMModel):
+    """The number of clicks that came from one country."""
+
     country: str  # ISO code, or "Unknown" when no country was recorded
     clicks: int
 
 
 class CityCount(ORMModel):
+    """The number of clicks that came from one city."""
+
     city: str  # or "Unknown"
     country: str  # the same city name can exist in different countries
     clicks: int
 
 
 class DailyCount(ORMModel):
+    """The number of clicks on one day."""
+
     day: date
     clicks: int
 
 
 class ReferrerCount(ORMModel):
+    """The number of clicks that came from one referrer (the page that linked here)."""
+
     referrer: str  # "Direct" when the visitor came without a referrer
     clicks: int
 
 
 class URLAnalytics(ORMModel):
+    """Click statistics for one short URL: totals, visitors, places, days and referrers."""
+
     short_code: str
     days: int  # size of the clicks_per_day window
     total_clicks: int

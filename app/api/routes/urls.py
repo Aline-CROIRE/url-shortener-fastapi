@@ -1,3 +1,5 @@
+"""Endpoints to create, list, get, update and delete short URLs."""
+
 from typing import Annotated
 
 from fastapi import APIRouter, Body, Query, Response, status
@@ -47,6 +49,7 @@ UPDATE_EXAMPLES = {
 
 
 def to_url_read(url: URL, settings: Settings) -> URLRead:
+    """Convert a URL model into the URLRead response, with its full short_url."""
     # short_url is built from base_url (a setting), passed as validation context
     return URLRead.model_validate(url, context={"base_url": settings.base_url})
 
@@ -65,6 +68,7 @@ async def create_url(
     owner_id: CurrentOwnerId,
     settings: SettingsDep,
 ) -> URLRead:
+    """Create a short URL."""
     url = await service.create(payload, owner_id)
     return to_url_read(url, settings)
 
@@ -87,14 +91,20 @@ async def list_urls(
     cursor: Annotated[str | None, Query(description="next_cursor from the previous page")] = None,
     sort: Annotated[URLSort, Query(description="newest or most_clicked")] = URLSort.NEWEST,
     tag: Annotated[
-        str | None, Query(min_length=1, max_length=TAG_NAME_MAX_LENGTH, description="Tag name (any case)")
+        str | None,
+        Query(min_length=1, max_length=TAG_NAME_MAX_LENGTH, description="Tag name (any case)"),
     ] = None,
-    is_active: Annotated[bool | None, Query(description="Only switched on (true) or off (false)")] = None,
-    expired: Annotated[bool | None, Query(description="Only expired (true) or not expired (false)")] = None,
+    is_active: Annotated[
+        bool | None, Query(description="Only switched on (true) or off (false)")
+    ] = None,
+    expired: Annotated[
+        bool | None, Query(description="Only expired (true) or not expired (false)")
+    ] = None,
     search: Annotated[
         str | None, Query(min_length=1, max_length=200, description="Text in the URL or title")
     ] = None,
 ) -> URLPage:
+    """List your short URLs."""
     filters = URLFilters(tag=tag, is_active=is_active, expired=expired, search=search)
     urls, next_cursor = await service.list_page(owner_id, filters, sort, limit, cursor)
     return URLPage(items=[to_url_read(url, settings) for url in urls], next_cursor=next_cursor)
@@ -113,6 +123,7 @@ async def get_url(
     owner_id: CurrentOwnerId,
     settings: SettingsDep,
 ) -> URLRead:
+    """Get one of your short URLs."""
     url = await service.get(short_code, owner_id)  # someone else's or deleted -> 404
     return to_url_read(url, settings)
 
@@ -134,6 +145,7 @@ async def update_url(
     owner_id: CurrentOwnerId,
     settings: SettingsDep,
 ) -> URLRead:
+    """Update one of your short URLs."""
     url = await service.update(short_code, owner_id, payload)
     return to_url_read(url, settings)
 
@@ -152,5 +164,6 @@ async def update_url(
 async def delete_url(
     short_code: ShortCodePath, service: URLServiceDep, owner_id: CurrentOwnerId
 ) -> Response:
+    """Delete one of your short URLs."""
     await service.delete(short_code, owner_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

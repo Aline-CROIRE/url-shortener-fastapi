@@ -1,3 +1,5 @@
+"""Shared path parameters for the API routes."""
+
 from typing import Annotated
 
 from fastapi import Path

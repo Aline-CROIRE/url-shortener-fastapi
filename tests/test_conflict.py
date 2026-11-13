@@ -3,7 +3,7 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api.dependencies import UserRepoDep, URLRepoDep
+from app.api.dependencies import URLRepoDep, UserRepoDep
 from app.models import URL, User
 
 

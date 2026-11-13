@@ -96,7 +96,9 @@ def test_first_visit_fills_the_cache_second_visit_skips_the_select(
     assert db_client.get(f"{API}/{code}").json()["click_count"] == 2  # both visits recorded
 
 
-def test_ttl_never_outlives_the_link(db_client: TestClient, owner_id: int, fake_redis: FakeRedis) -> None:
+def test_ttl_never_outlives_the_link(
+    db_client: TestClient, owner_id: int, fake_redis: FakeRedis
+) -> None:
     expires = (datetime.now(UTC) + timedelta(minutes=2)).isoformat()
     code = create(db_client, expires_at=expires)
 
@@ -145,7 +147,9 @@ def test_put_invalidates_so_the_new_target_is_used(
     assert db_client.get(f"/{code}").headers["location"] == "https://fastapi.tiangolo.com/"
 
 
-def test_switching_off_invalidates(db_client: TestClient, owner_id: int, fake_redis: FakeRedis) -> None:
+def test_switching_off_invalidates(
+    db_client: TestClient, owner_id: int, fake_redis: FakeRedis
+) -> None:
     code = create(db_client)
     db_client.get(f"/{code}")
 
@@ -207,7 +211,9 @@ def test_redis_down_redirects_still_work(
 
     assert response.status_code == 302  # served from the database
     assert "Redis unavailable" in caplog.text
-    assert db_client.put(f"{API}/{code}", json={"title": "x"}).status_code == 200  # invalidate fails quietly
+    assert (
+        db_client.put(f"{API}/{code}", json={"title": "x"}).status_code == 200
+    )  # invalidate fails quietly
     health = db_client.get("/health")
     assert health.status_code == 200  # still healthy: only slower
     assert health.json()["cache"] == "down"

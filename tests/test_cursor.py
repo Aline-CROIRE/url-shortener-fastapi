@@ -40,9 +40,18 @@ def test_cursor_from_another_sort_is_rejected() -> None:
         (base64.urlsafe_b64encode(b"not json").decode(), URLSort.NEWEST),
         (raw_cursor({"values": ["2026-11-12T10:00:00+00:00", 1]}), URLSort.NEWEST),  # no sort
         (raw_cursor({"sort": "newest", "values": ["yesterday", 1]}), URLSort.NEWEST),
-        (raw_cursor({"sort": "newest", "values": ["2026-11-12T10:00:00", 1]}), URLSort.NEWEST),  # no tz
-        (raw_cursor({"sort": "newest", "values": ["2026-11-12T10:00:00+00:00", "1"]}), URLSort.NEWEST),
-        (raw_cursor({"sort": "newest", "values": ["2026-11-12T10:00:00+00:00", True]}), URLSort.NEWEST),
+        (
+            raw_cursor({"sort": "newest", "values": ["2026-11-12T10:00:00", 1]}),
+            URLSort.NEWEST,
+        ),  # no tz
+        (
+            raw_cursor({"sort": "newest", "values": ["2026-11-12T10:00:00+00:00", "1"]}),
+            URLSort.NEWEST,
+        ),
+        (
+            raw_cursor({"sort": "newest", "values": ["2026-11-12T10:00:00+00:00", True]}),
+            URLSort.NEWEST,
+        ),
         (raw_cursor({"sort": "most_clicked", "values": [-1, 1]}), URLSort.MOST_CLICKED),
         (raw_cursor({"sort": "most_clicked", "values": [1]}), URLSort.MOST_CLICKED),
     ],

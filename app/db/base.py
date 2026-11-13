@@ -1,4 +1,7 @@
+"""Base class for all table models and the shared id/timestamp columns."""
+
 from datetime import datetime
+from typing import Any, ClassVar
 
 from sqlalchemy import DateTime, MetaData, func
 from sqlalchemy.ext.asyncio import AsyncAttrs
@@ -31,13 +34,11 @@ class TimestampMixin:
     # After INSERT and UPDATE, read the values Postgres filled in (created_at,
     # updated_at) back with RETURNING. Without it, touching url.updated_at after
     # an UPDATE would need a hidden reload, which async code cannot do.
-    __mapper_args__ = {"eager_defaults": True}
+    __mapper_args__: ClassVar[dict[str, Any]] = {"eager_defaults": True}
 
     id: Mapped[int] = mapped_column(primary_key=True)
     # server_default: Postgres fills the time itself when the row is inserted
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     # onupdate: SQLAlchemy sets a new time whenever the row is updated through the ORM
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

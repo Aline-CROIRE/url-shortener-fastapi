@@ -34,7 +34,9 @@ async def test_new_user_gets_defaults_and_timestamps(db_session: AsyncSession) -
 async def test_server_defaults_work_without_python(db_session: AsyncSession) -> None:
     # Raw SQL skips Python's default=..., so only server_default can fill these
     await db_session.execute(
-        text("INSERT INTO users (email, username, hashed_password) VALUES ('raw@x.com', 'raw', 'h')")
+        text(
+            "INSERT INTO users (email, username, hashed_password) VALUES ('raw@x.com', 'raw', 'h')"
+        )
     )
     row = (
         await db_session.execute(text("SELECT is_premium, tier FROM users WHERE username = 'raw'"))

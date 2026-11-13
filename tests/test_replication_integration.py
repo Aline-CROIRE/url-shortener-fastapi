@@ -26,7 +26,9 @@ TAG = "ReplicationProbe"
 
 def replica_is_reachable() -> bool:
     async def ping() -> bool:
-        engine = create_async_engine(REPLICA_TEST_URL, poolclass=NullPool, connect_args={"timeout": 2})
+        engine = create_async_engine(
+            REPLICA_TEST_URL, poolclass=NullPool, connect_args={"timeout": 2}
+        )
         try:
             async with engine.connect() as connection:
                 return bool(await connection.scalar(text("SELECT pg_is_in_recovery()")))

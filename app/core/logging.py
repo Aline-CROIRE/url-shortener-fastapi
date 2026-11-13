@@ -1,3 +1,5 @@
+"""Logging setup for the app."""
+
 import logging
 
 

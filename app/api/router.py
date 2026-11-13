@@ -1,3 +1,5 @@
+"""Main /api/v1 router that groups the URL and analytics routes."""
+
 from fastapi import APIRouter
 
 from app.api.routes.analytics import router as analytics_router

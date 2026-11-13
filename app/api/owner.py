@@ -20,28 +20,27 @@ UNUSABLE_PASSWORD_HASH = "!"
 
 
 async def get_current_owner_id(request: Request) -> int:
-    """The id of the one demo user that owns every URL for now (created once).
+    """Return the id of the one demo user that owns every URL for now.
 
-    It uses its OWN short session, not the request's session, so the services
-    can still open their transaction with session.begin().
+    The user is created once. It uses its OWN short session, not the request's
+    session, so the services can still open their transaction with session.begin().
     """
     cached: int | None = getattr(request.app.state, "demo_owner_id", None)
     if cached is not None:
         return cached
 
-    async with request.app.state.session_factory() as session:
-        async with session.begin():
-            # Safe even if two first requests arrive at the same moment
-            await session.execute(
-                insert(User)
-                .values(
-                    email=DEMO_OWNER_EMAIL,
-                    username=DEMO_OWNER_USERNAME,
-                    hashed_password=UNUSABLE_PASSWORD_HASH,
-                )
-                .on_conflict_do_nothing()
+    async with request.app.state.session_factory() as session, session.begin():
+        # Safe even if two first requests arrive at the same moment
+        await session.execute(
+            insert(User)
+            .values(
+                email=DEMO_OWNER_EMAIL,
+                username=DEMO_OWNER_USERNAME,
+                hashed_password=UNUSABLE_PASSWORD_HASH,
             )
-            owner_id = await session.scalar(select(User.id).where(User.email == DEMO_OWNER_EMAIL))
+            .on_conflict_do_nothing()
+        )
+        owner_id = await session.scalar(select(User.id).where(User.email == DEMO_OWNER_EMAIL))
 
     request.app.state.demo_owner_id = owner_id
     return owner_id

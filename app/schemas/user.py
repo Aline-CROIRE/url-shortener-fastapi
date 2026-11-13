@@ -1,3 +1,5 @@
+"""Input and output schemas for users."""
+
 from datetime import datetime
 
 from pydantic import BaseModel, EmailStr, Field, SecretStr, field_validator
@@ -12,7 +14,9 @@ class UserCreate(BaseModel):
     """What a client sends to create a user (registration arrives in Module 7)."""
 
     email: EmailStr = Field(examples=["aline@example.com"])
-    username: str = Field(min_length=3, max_length=150, pattern=USERNAME_PATTERN, examples=["aline"])
+    username: str = Field(
+        min_length=3, max_length=150, pattern=USERNAME_PATTERN, examples=["aline"]
+    )
     first_name: str = Field(default="", max_length=150)
     last_name: str = Field(default="", max_length=150)
     # SecretStr prints as '**********', so the password never leaks into logs.
@@ -22,6 +26,7 @@ class UserCreate(BaseModel):
     @field_validator("email")
     @classmethod
     def lowercase_email(cls, email: str) -> str:
+        """Return the email in lowercase."""
         # "Aline@Example.com" and "aline@example.com" are the same person
         return email.lower()
 

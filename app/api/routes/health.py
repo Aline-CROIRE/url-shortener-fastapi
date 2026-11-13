@@ -1,3 +1,5 @@
+"""Health check endpoint for the app, the databases and the cache."""
+
 import logging
 from typing import Annotated
 
@@ -26,7 +28,10 @@ async def database_is_up(db: DbSession) -> bool:
 
 
 async def replica_is_up(db: ReadDbSession, settings: SettingsDep) -> bool | None:
-    """None when no replica is configured (reads then use the primary)."""
+    """Check the read replica; return None when no replica is configured.
+
+    Without a replica, reads use the primary database.
+    """
     if not settings.database_replica_url:
         return None
     try:
@@ -75,6 +80,7 @@ async def check_health(
     replica_ok: Annotated[bool | None, Depends(replica_is_up)],
     cache: RedirectCacheDep,
 ) -> dict[str, str]:
+    """Return the health status."""
     # The databases decide healthy/unhealthy. A configured replica that is down
     # breaks the read endpoints. The cache does not count: without it the app
     # still works (fail open), just a bit slower.

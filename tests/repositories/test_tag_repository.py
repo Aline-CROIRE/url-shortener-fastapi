@@ -30,7 +30,7 @@ async def test_get_by_name_ignores_case(repo: TagRepository) -> None:
 async def test_all_tags_is_sorted_by_name(repo: TagRepository) -> None:
     names = [tag.name for tag in await repo.fetch_all(repo.all_tags())]
 
-    assert SEEDED <= set(names)
+    assert set(names) >= SEEDED
     assert names == sorted(names)
 
 

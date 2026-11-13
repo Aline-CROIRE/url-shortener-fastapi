@@ -1,3 +1,4 @@
+import re
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -121,9 +122,7 @@ async def test_relationship_works_on_both_sides(db_session: AsyncSession, owner:
     await db_session.flush()
     db_session.expunge_all()  # forget the objects: force a real reload from Postgres
 
-    user = (
-        await db_session.execute(select(User).options(selectinload(User.urls)))
-    ).scalar_one()
+    user = (await db_session.execute(select(User).options(selectinload(User.urls)))).scalar_one()
     url = (
         await db_session.execute(
             select(URL).where(URL.short_code == "one").options(joinedload(URL.owner))
@@ -143,14 +142,18 @@ async def test_lazy_loading_is_not_allowed_in_async(db_session: AsyncSession, ow
 
     # lazy="raise" (F3.1): touching a relationship that was not loaded on purpose
     # raises a clear error instead of a hidden SELECT (or a confusing MissingGreenlet)
-    with pytest.raises(InvalidRequestError, match="'URL.owner' is not available due to lazy='raise'"):
+    with pytest.raises(
+        InvalidRequestError, match=re.escape("'URL.owner' is not available due to lazy='raise'")
+    ):
         _ = url.owner
 
 
 # ---------- cascade ----------
 
 
-async def test_deleting_a_user_deletes_their_urls_orm(db_session: AsyncSession, owner: User) -> None:
+async def test_deleting_a_user_deletes_their_urls_orm(
+    db_session: AsyncSession, owner: User
+) -> None:
     db_session.add_all([make_url(owner, short_code="one"), make_url(owner, short_code="two")])
     await db_session.flush()
 
@@ -160,7 +163,9 @@ async def test_deleting_a_user_deletes_their_urls_orm(db_session: AsyncSession, 
     assert await count_urls(db_session) == 0
 
 
-async def test_deleting_a_user_deletes_their_urls_sql(db_session: AsyncSession, owner: User) -> None:
+async def test_deleting_a_user_deletes_their_urls_sql(
+    db_session: AsyncSession, owner: User
+) -> None:
     db_session.add(make_url(owner))
     await db_session.flush()
 

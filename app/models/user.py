@@ -1,3 +1,5 @@
+"""The User model and the UserTier membership levels."""
+
 from datetime import datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING
@@ -23,15 +25,17 @@ class UserTier(StrEnum):
 
     @property
     def label(self) -> str:
+        """Return the human-friendly name of the tier, e.g. "Free"."""
         return self.value.capitalize()  # "Free", "Premium", "Admin"
 
     @property
     def has_premium_features(self) -> bool:
+        """Return True for the tiers that get premium features (premium and admin)."""
         return self is not UserTier.FREE
 
 
 class User(TimestampMixin, Base):
-    """A person who owns short URLs.
+    """The users table: a person who owns short URLs.
 
     Mirrors Django's AbstractUser (username, first_name, last_name, email,
     is_staff, is_active, is_superuser, last_login, date_joined) plus is_premium
@@ -86,9 +90,10 @@ class User(TimestampMixin, Base):
 
     @validates("tier")
     def _keep_is_premium_in_sync(self, key: str, tier: UserTier) -> UserTier:
-        """Setting the tier also sets is_premium (premium and admin get premium features)."""
+        """Set is_premium whenever the tier is set (premium and admin get premium features)."""
         self.is_premium = UserTier(tier).has_premium_features
         return tier
 
     def __repr__(self) -> str:
+        """Return a short text form of the user for logs and debugging."""
         return f"<User id={self.id} email={self.email!r} tier={self.tier}>"

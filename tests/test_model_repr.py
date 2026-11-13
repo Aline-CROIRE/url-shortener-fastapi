@@ -11,7 +11,10 @@ def test_user_repr() -> None:
 
 
 def test_url_repr() -> None:
-    assert repr(URL(id=7, short_code="py-docs", owner_id=1)) == "<URL id=7 short_code='py-docs' owner_id=1>"
+    assert (
+        repr(URL(id=7, short_code="py-docs", owner_id=1))
+        == "<URL id=7 short_code='py-docs' owner_id=1>"
+    )
 
 
 def test_click_repr() -> None:

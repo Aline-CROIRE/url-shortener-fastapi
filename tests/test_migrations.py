@@ -6,7 +6,6 @@ Each test leaves the test database at "head" again, so other tests are not affec
 import asyncio
 from typing import Any
 
-from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
@@ -14,6 +13,7 @@ from sqlalchemy import Connection, text
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
 
+from alembic import command
 from app import models  # noqa: F401  (registers every model on Base.metadata)
 from app.core.config import get_settings
 from app.db.base import Base
@@ -35,7 +35,9 @@ async def run_query(database_url: str, sql: str) -> set[Any]:
 
 
 def tables(url: str) -> set[str]:
-    return asyncio.run(run_query(url, "SELECT tablename FROM pg_tables WHERE schemaname = 'public'"))
+    return asyncio.run(
+        run_query(url, "SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
+    )
 
 
 def enum_types(url: str) -> set[str]:
@@ -63,7 +65,7 @@ def test_downgrade_to_base_removes_everything_and_upgrade_rebuilds() -> None:
 def test_seed_migration_adds_default_tags_and_downgrade_removes_them() -> None:
     url = get_settings().test_database_url
     config = alembic_config(url)
-    assert DEFAULT_TAGS <= tag_names(url)  # at head: seeded
+    assert tag_names(url) >= DEFAULT_TAGS  # at head: seeded
 
     try:
         command.downgrade(config, BEFORE_SEED_REVISION)  # undo the seed (and anything newer)
@@ -71,7 +73,7 @@ def test_seed_migration_adds_default_tags_and_downgrade_removes_them() -> None:
         assert "tags" in tables(url)  # ...but the table itself is still there
     finally:
         command.upgrade(config, "head")
-    assert DEFAULT_TAGS <= tag_names(url)  # back again
+    assert tag_names(url) >= DEFAULT_TAGS  # back again
 
 
 def test_there_is_exactly_one_head() -> None:

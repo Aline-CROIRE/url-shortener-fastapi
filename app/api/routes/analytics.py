@@ -1,3 +1,5 @@
+"""Endpoint for the click analytics of one short URL."""
+
 from typing import Annotated
 
 from fastapi import APIRouter, Query
@@ -32,5 +34,6 @@ async def get_url_analytics(
         int, Query(ge=1, le=MAX_DAYS, description="How many days clicks_per_day covers")
     ] = 30,
 ) -> URLAnalytics:
+    """Return the click analytics of one of your short URLs."""
     # TODO(module-7): premium-only feature once authentication and tiers exist
     return await service.for_url(short_code, owner_id, days)

@@ -1,3 +1,5 @@
+"""Random short code generation."""
+
 import secrets
 import string
 
@@ -6,5 +8,6 @@ CODE_LENGTH = 7
 
 
 def generate_code(length: int = CODE_LENGTH) -> str:
+    """Return a random short code made of letters and digits."""
     # secrets uses a cryptographically secure random source, so codes cannot be guessed
     return "".join(secrets.choice(ALPHABET) for _ in range(length))

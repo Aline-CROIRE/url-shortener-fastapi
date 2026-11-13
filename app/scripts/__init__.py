@@ -1,1 +1,1 @@
-"""Command-line scripts: python -m app.scripts.<name>"""
+"""Command-line scripts: python -m app.scripts.<name>."""

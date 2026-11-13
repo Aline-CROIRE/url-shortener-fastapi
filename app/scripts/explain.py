@@ -29,23 +29,31 @@ NO_DATA_MESSAGE = "No URLs in the database yet. Run first:  python -m app.script
 
 @dataclass(frozen=True)
 class ExplainedQuery:
+    """One query's title and the plan lines PostgreSQL printed for it."""
+
     title: str
     plan: list[str]
 
     @property
     def indexes_used(self) -> list[str]:
+        """Return the names of the indexes the plan uses."""
         # "Index Scan using ix_..", "Index Only Scan using ix_..", "Bitmap Index Scan on ix_.."
         text = "\n".join(self.plan)
         return sorted(set(re.findall(r"(?:using|Bitmap Index Scan on) (\w+)", text)))
 
     @property
     def sequential_scans(self) -> list[str]:
+        """Return the tables the plan reads with a full sequential scan."""
         return sorted(set(re.findall(r"Seq Scan on (\w+)", "\n".join(self.plan))))
 
 
-async def explain(connection: AsyncConnection, title: str, statement: Select[Any]) -> ExplainedQuery:
-    """EXPLAIN the statement exactly as the app sends it: compiled for our driver
-    (asyncpg placeholders $1, $2, ...) with the values passed separately.
+async def explain(
+    connection: AsyncConnection, title: str, statement: Select[Any]
+) -> ExplainedQuery:
+    """Run EXPLAIN ANALYZE on the statement exactly as the app sends it.
+
+    The statement is compiled for our driver (asyncpg placeholders $1, $2, ...)
+    with the values passed separately.
     """
     compiled = statement.compile(dialect=connection.dialect)
     values = tuple(compiled.params[name] for name in compiled.positiontup or ())
@@ -54,7 +62,7 @@ async def explain(connection: AsyncConnection, title: str, statement: Select[Any
 
 
 async def explain_report(connection: AsyncConnection) -> list[ExplainedQuery]:
-    """EXPLAIN ANALYZE the redirect lookup, the URL list and analytics.
+    """Run EXPLAIN ANALYZE on the redirect lookup, the URL list and analytics.
 
     Returns an empty list when there is no URL to explain the queries with.
     """
@@ -75,7 +83,10 @@ async def explain_report(connection: AsyncConnection) -> list[ExplainedQuery]:
     since = datetime.now(UTC) - timedelta(days=30)
 
     queries: list[tuple[str, Select[Any]]] = [
-        ("Redirect: find a URL by its short code", select(URL).where(URL.short_code == url.short_code)),
+        (
+            "Redirect: find a URL by its short code",
+            select(URL).where(URL.short_code == url.short_code),
+        ),
         (
             "URL list: first page (newest first)",
             URLRepository.list_owned(url.owner_id, no_filters).limit(PAGE_SIZE + 1),
@@ -91,7 +102,9 @@ async def explain_report(connection: AsyncConnection) -> list[ExplainedQuery]:
         ("Analytics: clicks per UTC day, last 30 days", ClickRepository.per_day(url.id, since)),
         (
             "Search inside ONE owner's URLs (ILIKE '%...%')",
-            URLRepository.list_owned(url.owner_id, URLFilters(search="article 9")).limit(PAGE_SIZE + 1),
+            URLRepository.list_owned(url.owner_id, URLFilters(search="article 9")).limit(
+                PAGE_SIZE + 1
+            ),
         ),
         (
             "Search across ALL URLs (no owner filter) - the honest bad case",
@@ -102,6 +115,7 @@ async def explain_report(connection: AsyncConnection) -> list[ExplainedQuery]:
 
 
 def print_report(report: list[ExplainedQuery]) -> None:
+    """Print each plan with the indexes it uses and any sequential scans."""
     if not report:
         print(NO_DATA_MESSAGE)
         return
@@ -115,6 +129,7 @@ def print_report(report: list[ExplainedQuery]) -> None:
 
 
 async def run() -> None:
+    """Connect to the database, build the report and print it."""
     engine = create_engine(get_settings().database_url)
     try:
         async with engine.connect() as connection:
@@ -124,6 +139,7 @@ async def run() -> None:
 
 
 def main() -> None:
+    """Run the EXPLAIN report from the command line."""
     asyncio.run(run())
 
 

@@ -1,3 +1,5 @@
+"""The URL model and its manager (URL.objects) with ready-made queries."""
+
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, ClassVar
 
@@ -31,7 +33,7 @@ MAX_POPULAR_LIMIT = 100
 
 
 class URL(TimestampMixin, Base):
-    """A short link owned by a user.
+    """The urls table: a short link owned by a user.
 
     URL.objects is the Django-style manager: URL.objects.active_urls() etc.
     """
@@ -55,12 +57,8 @@ class URL(TimestampMixin, Base):
     )
 
     original_url: Mapped[str] = mapped_column(Text)
-    short_code: Mapped[str] = mapped_column(
-        String(SHORT_CODE_MAX_LENGTH), unique=True, index=True
-    )
-    custom_alias: Mapped[str | None] = mapped_column(
-        String(SHORT_CODE_MAX_LENGTH), unique=True
-    )
+    short_code: Mapped[str] = mapped_column(String(SHORT_CODE_MAX_LENGTH), unique=True, index=True)
+    custom_alias: Mapped[str | None] = mapped_column(String(SHORT_CODE_MAX_LENGTH), unique=True)
     # Indexed by ix_urls_owner_id_created_at_id (Postgres does not index FKs itself)
     owner_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
     is_active: Mapped[bool] = mapped_column(default=True, server_default=true())
@@ -100,20 +98,32 @@ class URL(TimestampMixin, Base):
 
     @hybrid_method
     def is_expired(self, now: datetime) -> bool:
-        """Expiry reached. Exactly at expires_at counts as expired."""
+        """Return True if the expiry time is reached (Python side).
+
+        Exactly at expires_at counts as expired.
+        """
         return self.expires_at is not None and self.expires_at <= now
 
-    @is_expired.expression
-    def is_expired(cls, now: datetime) -> ColumnElement[bool]:
+    # ".inplace.expression" + @classmethod: SQLAlchemy 2.0's typed way to give a
+    # hybrid its SQL side under a separate (private) name
+    @is_expired.inplace.expression  # type: ignore[attr-defined]  # mypy sees a plain function here
+    @classmethod
+    def _is_expired_expression(cls, now: datetime) -> ColumnElement[bool]:
+        """Build the SQL condition "expiry time is reached" (SQL side)."""
         return cls.expires_at <= now  # NULL <= now is not true, so "no expiry" never matches
 
     @hybrid_method
     def is_live(self, now: datetime) -> bool:
-        """Not deleted, switched on and not expired: the link may redirect."""
+        """Return True if the link may redirect (Python side).
+
+        Live means: not deleted, switched on and not expired.
+        """
         return self.deleted_at is None and self.is_active and not self.is_expired(now)
 
-    @is_live.expression
-    def is_live(cls, now: datetime) -> ColumnElement[bool]:
+    @is_live.inplace.expression  # type: ignore[attr-defined]  # same descriptor limitation
+    @classmethod
+    def _is_live_expression(cls, now: datetime) -> ColumnElement[bool]:
+        """Build the SQL condition "the link may redirect" (SQL side)."""
         return and_(
             cls.deleted_at.is_(None),
             cls.is_active.is_(True),
@@ -121,13 +131,14 @@ class URL(TimestampMixin, Base):
         )
 
     def __repr__(self) -> str:
+        """Return a short text form of the URL for logs and debugging."""
         return f"<URL id={self.id} short_code={self.short_code!r} owner_id={self.owner_id}>"
 
 
 class URLManager:
-    """The Django "Manager" for URLs: URL.objects.active_urls(), .expired_urls(),
-    .popular_urls().
+    """Ready-made URL queries, like a Django "Manager".
 
+    Use it as URL.objects.active_urls(), .expired_urls() and .popular_urls().
     Each method returns a select() statement (nothing is sent yet), so callers can
     keep adding .where(), .order_by() or .limit() and run it once, e.g.
         URL.objects.active_urls().where(URL.owner_id == 5)
@@ -135,19 +146,30 @@ class URLManager:
 
     @staticmethod
     def active_urls(now: datetime | None = None) -> Select[tuple[URL]]:
-        """Not deleted, switched on, and no expiry or expiry still in the future."""
+        """Select the live URLs.
+
+        Live means: not deleted, switched on, and no expiry or expiry still in the future.
+        """
         return select(URL).where(URL.is_live(now or datetime.now(UTC)))
 
     @staticmethod
     def expired_urls(now: datetime | None = None) -> Select[tuple[URL]]:
-        """Expiry reached. "<=" (not "<"): a URL expiring exactly now is expired,
+        """Select the URLs whose expiry time is reached.
+
+        "<=" (not "<"): a URL expiring exactly now is expired,
         so no URL falls between active_urls() and expired_urls().
         """
         return select(URL).where(URL.is_expired(now or datetime.now(UTC)))
 
     @staticmethod
     def popular_urls(limit: int = 10) -> Select[tuple[URL]]:
-        """Most clicked first; id breaks ties so the order is always the same."""
+        """Select the most clicked URLs first.
+
+        The id breaks ties so the order is always the same.
+
+        Raises:
+            ValueError: If limit is not between 1 and MAX_POPULAR_LIMIT.
+        """
         if not 1 <= limit <= MAX_POPULAR_LIMIT:
             raise ValueError(f"limit must be between 1 and {MAX_POPULAR_LIMIT}")
         return select(URL).order_by(URL.click_count.desc(), URL.id).limit(limit)

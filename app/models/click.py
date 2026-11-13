@@ -1,3 +1,5 @@
+"""The Click model: one row per visit of a short link."""
+
 from datetime import datetime
 from ipaddress import IPv4Address, IPv6Address
 from typing import TYPE_CHECKING
@@ -13,8 +15,10 @@ if TYPE_CHECKING:  # only for type checkers: avoids a circular import at runtime
 
 
 class Click(Base):
-    """One visit of a short link. Rows are only inserted, never updated,
-    so there is no TimestampMixin (no updated_at); clicked_at is the timestamp.
+    """The clicks table: one visit of a short link.
+
+    Rows are only inserted, never updated, so there is no TimestampMixin
+    (no updated_at); clicked_at is the timestamp.
     """
 
     __tablename__ = "clicks"
@@ -29,9 +33,7 @@ class Click(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     url_id: Mapped[int] = mapped_column(ForeignKey("urls.id", ondelete="CASCADE"))
     # The database clock stamps the time, not the app
-    clicked_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    clicked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     # INET validates the address and stores IPv4/IPv6 compactly.
     # Nullable: the client address can be missing or not a real IP.
     ip_address: Mapped[IPv4Address | IPv6Address | None] = mapped_column(INET)
@@ -45,4 +47,5 @@ class Click(Base):
     url: Mapped["URL"] = relationship(back_populates="clicks", lazy="raise")
 
     def __repr__(self) -> str:
+        """Return a short text form of the click for logs and debugging."""
         return f"<Click id={self.id} url_id={self.url_id} clicked_at={self.clicked_at}>"
