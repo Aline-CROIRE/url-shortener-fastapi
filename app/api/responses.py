@@ -1,3 +1,5 @@
+"""Reusable OpenAPI error responses, so Swagger shows the real error shape."""
+
 from typing import Any
 
 from fastapi import status
@@ -27,6 +29,36 @@ NOT_FOUND: dict[int | str, dict[str, Any]] = {
         {"short_code": "aB3dE9x"},
     ),
 }
+GONE: dict[int | str, dict[str, Any]] = {
+    status.HTTP_410_GONE: _error_doc(
+        "Expired or switched off",
+        "url_expired",
+        "Short URL 'aB3dE9x' is expired and no longer redirects.",
+        {"short_code": "aB3dE9x"},
+    ),
+}
+CONFLICT: dict[int | str, dict[str, Any]] = {
+    status.HTTP_409_CONFLICT: _error_doc(
+        "Already exists",
+        "conflict",
+        "This value already exists.",
+        {"constraint": "uq_urls_custom_alias"},
+    ),
+}
+UNAUTHORIZED: dict[int | str, dict[str, Any]] = {
+    status.HTTP_401_UNAUTHORIZED: _error_doc(
+        "Not logged in",
+        "not_authenticated",
+        "Log in first: POST /api/v1/auth/login/.",
+    ),
+}
+INVALID_CURSOR: dict[int | str, dict[str, Any]] = {
+    status.HTTP_400_BAD_REQUEST: _error_doc(
+        "Bad cursor",
+        "invalid_cursor",
+        "The cursor is not valid. Start again without a cursor.",
+    ),
+}
 VALIDATION_ERROR: dict[int | str, dict[str, Any]] = {
     status.HTTP_422_UNPROCESSABLE_CONTENT: _error_doc(
         "Invalid input",
@@ -46,12 +78,5 @@ INTERNAL_ERROR: dict[int | str, dict[str, Any]] = {
         "Server error",
         "internal_server_error",
         "An unexpected error occurred.",
-    ),
-}
-STORAGE_UNAVAILABLE: dict[int | str, dict[str, Any]] = {
-    status.HTTP_503_SERVICE_UNAVAILABLE: _error_doc(
-        "Redis is down",
-        "storage_unavailable",
-        "The storage service is temporarily unavailable. Please try again later.",
     ),
 }

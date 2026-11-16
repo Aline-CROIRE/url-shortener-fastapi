@@ -1,4 +1,4 @@
-# Local DEVELOPMENT: app with hot reload + Redis
+# Local DEVELOPMENT: app with hot reload + PostgreSQL + Redis (cache)
 # Run: docker compose up --build
 services:
   app:
@@ -14,28 +14,87 @@ services:
       # These win over values from .env
       ENVIRONMENT: development
       DEBUG: "true"
-      STORAGE_BACKEND: redis
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/url_shortener # "db" = service below
       REDIS_URL: redis://redis:6379/0 # "redis" = the service name below
+      # Reads go to the replica when set (start it with: --profile replica). Empty = primary.
+      DATABASE_REPLICA_URL: ${DATABASE_REPLICA_URL:-}
       BASE_URL: http://localhost:8000
       # Windows/macOS do not send file-change events into containers; poll instead
       WATCHFILES_FORCE_POLLING: "true"
     volumes:
       - ./app:/app/app # your code, live inside the container
     depends_on:
+      migrate:
+        condition: service_completed_successfully # start only after the schema is up to date
       redis:
-        condition: service_healthy # wait until Redis answers PING
+        condition: service_healthy # the app also works without it, but start it first
+
+  # One-off job: brings the database to the newest migration, then exits.
+  # Runs once, before the app, so app workers never race to migrate.
+  migrate:
+    build: .
+    command: alembic upgrade head
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/url_shortener
+    volumes:
+      - ./alembic:/app/alembic # new migrations are picked up without rebuilding
+      - ./app:/app/app
+    depends_on:
+      db:
+        condition: service_healthy # wait until Postgres accepts connections
+
+  # Optional READ-ONLY copy of "db" (streaming replication). Not started by default:
+  #   docker compose --profile replica up -d db-replica
+  # Needs replication enabled on the primary (docker/postgres/enable-replication.sh).
+  db-replica:
+    image: postgres:17-alpine
+    profiles: ["replica"]
+    entrypoint: ["sh", "/start-replica.sh"]
+    environment:
+      PGDATA: /var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5434:5432" # 5434: 5432 is the primary, 5433 is used by another project
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d url_shortener"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - postgres-replica-data:/var/lib/postgresql/data
+      - ./docker/postgres-replica/start-replica.sh:/start-replica.sh:ro
+    depends_on:
+      db:
+        condition: service_healthy
 
   redis:
     image: redis:8-alpine
     ports:
-      - "127.0.0.1:6379:6379" # only this computer can connect (used by integration tests)
+      - "127.0.0.1:6379:6379" # only this computer can connect (local runs + integration tests)
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
+    # A cache, not a database: no volume. Losing it only means a few cache misses.
+
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres # local development only
+      POSTGRES_DB: url_shortener
+    ports:
+      - "127.0.0.1:5432:5432" # only this computer can connect (used by tests and local runs)
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d url_shortener"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
     volumes:
-      - redis-data:/data # keep data when the container is recreated
+      - postgres-data:/var/lib/postgresql/data # keep data when the container is recreated
+      # Scripts in this folder run on the very first start: creates the test database
+      - ./docker/postgres:/docker-entrypoint-initdb.d:ro
 
 volumes:
-  redis-data:
+  postgres-data:
+  postgres-replica-data:

@@ -1,0 +1,12 @@
+"""All table models, imported in one place.
+
+Importing this package registers every model on Base.metadata, which Alembic
+(alembic/env.py) needs to see all tables. Add each new model here.
+"""
+
+from app.models.click import Click
+from app.models.tag import Tag, url_tags
+from app.models.url import URL
+from app.models.user import User, UserTier
+
+__all__ = ["URL", "Click", "Tag", "User", "UserTier", "url_tags"]

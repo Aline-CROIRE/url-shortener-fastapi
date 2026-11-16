@@ -3,3 +3,7 @@ __pycache__/
 *.pyc
 .env
 .pytest_cache/
+
+# Coverage data and HTML reports (pytest --cov)
+.coverage
+htmlcov/

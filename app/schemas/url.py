@@ -1,30 +1,180 @@
-from datetime import datetime
+"""Input and output schemas for short URLs."""
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl
+from datetime import UTC, datetime
+from typing import Annotated, Self
+
+from pydantic import (
+    AfterValidator,
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    HttpUrl,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
+
+from app.models.url import SHORT_CODE_MAX_LENGTH
+from app.schemas.base import ORMModel
+from app.schemas.tag import TagName, TagRead
+from app.schemas.user import OwnerRead
+
+ALIAS_PATTERN = r"^[A-Za-z0-9_-]+$"
+# Aliases that would clash with the app's own paths (/docs, /health, /api/...)
+RESERVED_ALIASES = frozenset({"api", "docs", "redoc", "health", "openapi", "static", "admin"})
+MAX_TAGS_PER_URL = 10
+
+
+# ---------- reusable field types ----------
+
+
+def check_in_future(expires_at: datetime) -> datetime:
+    """Return expires_at unchanged if it is in the future.
+
+    Raises:
+        ValueError: If expires_at is now or in the past.
+    """
+    if expires_at <= datetime.now(UTC):
+        raise ValueError("expires_at must be in the future")
+    return expires_at
+
+
+def remove_duplicate_tags(tags: list[str]) -> list[str]:
+    """Keep the first spelling of each tag, ignoring case: ["Ads", "ads"] -> ["Ads"]."""
+    seen: set[str] = set()
+    unique: list[str] = []
+    for tag in tags:
+        if tag.lower() not in seen:
+            seen.add(tag.lower())
+            unique.append(tag)
+    return unique
+
+
+# A timezone-aware datetime that must be in the future
+FutureDatetime = Annotated[AwareDatetime, AfterValidator(check_in_future)]
+# Up to 10 clean tag names, duplicates (ignoring case) removed
+TagList = Annotated[
+    list[TagName], Field(max_length=MAX_TAGS_PER_URL), AfterValidator(remove_duplicate_tags)
+]
+
+
+# ---------- input schemas ----------
 
 
 class URLCreate(BaseModel):
-    original_url: HttpUrl = Field(
-        description="Long URL (http or https)",
-        examples=["https://www.python.org/about/"],
+    """What a client sends to create a short URL."""
+
+    model_config = ConfigDict(extra="forbid")  # unknown fields -> 422, not silently ignored
+
+    original_url: HttpUrl = Field(examples=["https://www.python.org/about/"])
+    custom_alias: str | None = Field(
+        default=None,
+        min_length=3,
+        max_length=SHORT_CODE_MAX_LENGTH,
+        pattern=ALIAS_PATTERN,
+        description="Your own short code: 3-10 letters, digits, '-' or '_'",
+        examples=["py-docs"],
     )
-
-
-class URLRead(BaseModel):
-    model_config = ConfigDict(
-        json_schema_extra={
-            "examples": [
-                {
-                    "short_code": "aB3dE9x",
-                    "original_url": "https://www.python.org/about/",
-                    "short_url": "http://localhost:8000/aB3dE9x",
-                    "created_at": "2026-11-04T10:15:30.123456Z",
-                }
-            ]
-        }
+    expires_at: FutureDatetime | None = Field(
+        default=None,
+        description="When the link stops working (must include a timezone)",
+        examples=["2027-01-31T23:59:59Z"],
     )
+    tags: TagList = Field(default_factory=list, examples=[["Marketing", "Social"]])
 
-    short_code: str = Field(description="7 letters or digits")
-    original_url: str = Field(description="Long URL")
-    short_url: str = Field(description="Link to share")
-    created_at: datetime = Field(description="Creation time (UTC)")
+    @field_validator("custom_alias")
+    @classmethod
+    def alias_is_not_reserved(cls, alias: str | None) -> str | None:
+        """Refuse aliases that clash with the app's own paths (e.g. "docs", "api")."""
+        if alias is not None and alias.lower() in RESERVED_ALIASES:
+            raise ValueError(f"'{alias}' is reserved, please choose another alias")
+        return alias
+
+
+class URLUpdate(BaseModel):
+    """The fields a client may change on a short URL.
+
+    Every field is optional: only the fields you send are changed. The short code
+    and alias cannot be changed, because links already shared would break.
+    """
+
+    # (Developer note) The service reads only the sent fields with
+    # model_dump(exclude_unset=True).
+
+    model_config = ConfigDict(extra="forbid")
+
+    original_url: HttpUrl | None = None
+    is_active: bool | None = None
+    expires_at: FutureDatetime | None = Field(
+        default=None, description="Send null to remove the expiry date"
+    )
+    title: str | None = Field(default=None, max_length=255)
+    description: str | None = None
+    tags: TagList | None = Field(default=None, description="Replaces all tags")
+
+    @field_validator("original_url", "is_active", "tags")
+    @classmethod
+    def cannot_be_null(cls, value: object) -> object:
+        """Refuse an explicit null for fields whose columns can never be empty."""
+        # Runs only for values the client SENT. "Not sent" is fine; an explicit
+        # null is not, because these columns can never be empty.
+        if value is None:
+            raise ValueError("cannot be null")
+        return value
+
+
+# ---------- output schema ----------
+
+
+class URLRead(ORMModel):
+    """A short URL with its owner, tags and click count."""
+
+    # (Developer note) Build it with URLRead.model_validate(url, context={"base_url": ...})
+    # so short_url can be filled in.
+
+    id: int
+    short_code: str
+    short_url: str = ""  # filled from the validation context below
+    original_url: str
+    custom_alias: str | None
+    is_active: bool
+    expires_at: datetime | None
+    title: str | None
+    description: str | None
+    favicon: str | None
+    click_count: int
+    created_at: datetime
+    updated_at: datetime
+    owner: OwnerRead
+    tags: list[TagRead]
+
+    @model_validator(mode="after")
+    def build_short_url(self, info: ValidationInfo) -> Self:
+        """Build short_url from the base_url passed in the validation context.
+
+        Raises:
+            ValueError: If no base_url was passed in the context.
+        """
+        if self.short_url:
+            # Already built: FastAPI validates the returned URLRead a second time
+            # (without our context) before sending it; keep the value we made.
+            return self
+        # base_url is a setting, not a column, so the caller passes it in
+        base_url = (info.context or {}).get("base_url")
+        if not base_url:
+            raise ValueError("URLRead needs context={'base_url': ...} to build short_url")
+        self.short_url = f"{base_url.rstrip('/')}/{self.short_code}"
+        return self
+
+
+class URLPage(BaseModel):
+    """One page of the URL list (keyset pagination)."""
+
+    items: list[URLRead]
+    next_cursor: str | None = Field(
+        description="Send it as ?cursor=... to get the next page; null on the last page",
+        examples=[
+            "eyJzb3J0IjoibmV3ZXN0IiwidmFsdWVzIjpbIjIwMjYtMTEtMTJUMTA6MDA6MDArMDA6MDAiLDQyXX0"
+        ],
+    )

@@ -1,3 +1,5 @@
+"""Middleware that logs every request and adds a request ID to the response."""
+
 import logging
 import time
 import uuid
@@ -14,6 +16,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
     """Logs every request and adds an X-Request-ID header to every response."""
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        """Log the request and add the X-Request-ID header to the response."""
         # Reuse the caller's ID if it sent a short one, so logs can be matched
         # across services; otherwise make a new one.
         incoming_id = request.headers.get(REQUEST_ID_HEADER, "")

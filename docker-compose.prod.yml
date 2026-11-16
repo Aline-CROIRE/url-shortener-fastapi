@@ -1,5 +1,6 @@
 # PRODUCTION-like run: the image's default CMD (Gunicorn + Uvicorn workers), no code mount
-# Run: docker compose -f docker-compose.prod.yml up --build
+# Run: set POSTGRES_PASSWORD first (e.g. in a .env file), then
+#      docker compose -f docker-compose.prod.yml up --build
 services:
   app:
     build: .
@@ -9,24 +10,56 @@ services:
       ENVIRONMENT: production
       DEBUG: "false"
       WORKERS: ${WORKERS:-4}
-      STORAGE_BACKEND: redis
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-url_shortener}
       REDIS_URL: redis://redis:6379/0
       BASE_URL: ${BASE_URL:-http://localhost:8000}
+      SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY}  # signs the login cookie
+      SESSION_HTTPS_ONLY: ${SESSION_HTTPS_ONLY:-false}  # true once served over HTTPS
     depends_on:
+      migrate:
+        condition: service_completed_successfully # never start on an outdated schema
       redis:
         condition: service_healthy
     restart: unless-stopped
 
+  # One-off job: "alembic upgrade head", then exit. Runs once before the app,
+  # so the Gunicorn workers never try to migrate at the same time.
+  migrate:
+    build: .
+    command: alembic upgrade head
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-url_shortener}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no" # a finished job must not be restarted
+
   redis:
     image: redis:8-alpine
+    # Cache only: cap the memory and evict the least recently used keys when full
+    command: ["redis-server", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
+    restart: unless-stopped
+
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD} # never hard-code in production
+      POSTGRES_DB: ${POSTGRES_DB:-url_shortener}
+    # No "ports": only the app can reach the database, inside the Docker network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
     volumes:
-      - redis-data:/data
+      - postgres-data:/var/lib/postgresql/data
     restart: unless-stopped
 
 volumes:
-  redis-data:
+  postgres-data:
