@@ -19,7 +19,8 @@ opentelemetry-api==1.45.2
 anyio==4.16.0
 idna==3.20
 
-# Security: Argon2id password hashing, signed session cookies
+# Security: Argon2id password hashing (pwdlib, on top of argon2-cffi), signed session cookies
+pwdlib[argon2]==0.4.2
 argon2-cffi==25.1.0
 argon2-cffi-bindings==26.2.0
 cffi==2.1.1

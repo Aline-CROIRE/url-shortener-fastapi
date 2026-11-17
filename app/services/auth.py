@@ -7,7 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictError, InvalidCredentialsError
-from app.core.security import DUMMY_PASSWORD_HASH, hash_password, verify_password
+from app.core.security import DUMMY_HASH, hash_password, verify_password
 from app.db.errors import unique_violation_constraint
 from app.models import User
 from app.repositories import UserRepository
@@ -65,7 +65,7 @@ class AuthService:
         async with self._session.begin():
             user = await self._users.get_by_email(data.email)
             # Always run one (slow) verification, even for an unknown email
-            stored_hash = user.hashed_password if user else DUMMY_PASSWORD_HASH
+            stored_hash = user.hashed_password if user else DUMMY_HASH
             password_ok = await asyncio.to_thread(verify_password, password, stored_hash)
             if user is None or not password_ok or not user.is_active:
                 raise InvalidCredentialsError()
