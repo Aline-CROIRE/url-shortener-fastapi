@@ -1,7 +1,14 @@
+import os
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any
+
+# JWT_SECRET_KEY is required (the app refuses to start without it). Set a test-only
+# value BEFORE importing the app: importing app.main already builds the settings.
+# A value already set in the environment still wins.
+TEST_JWT_SECRET_KEY = "test-only-jwt-secret-key-at-least-32-chars"
+os.environ["JWT_SECRET_KEY"] = os.environ.get("JWT_SECRET_KEY", TEST_JWT_SECRET_KEY)
 
 import pytest
 from alembic.config import Config

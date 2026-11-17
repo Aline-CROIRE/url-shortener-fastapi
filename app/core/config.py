@@ -3,7 +3,7 @@
 from functools import lru_cache
 from typing import Literal, Self
 
-from pydantic import Field, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Only for development and tests. Production refuses to start with it (see below).
@@ -46,6 +46,31 @@ class Settings(BaseSettings):
     session_max_age_seconds: int = Field(default=86_400, ge=60)
     # True = the login cookie is only sent over HTTPS (turn on behind HTTPS in production)
     session_https_only: bool = False
+
+    # ---------- JWT (Module 7) ----------
+    # Signs and checks every token. REQUIRED, no default: a default would be written in
+    # the code, so everyone could read it and forge tokens. Missing or shorter than 32
+    # characters -> Settings() raises and the app refuses to start.
+    # SecretStr: printed as '**********'; read it with .get_secret_value()
+    jwt_secret_key: SecretStr
+    # Token lifetimes (not secret, so they have defaults)
+    access_token_minutes: int = Field(default=15, ge=1)
+    refresh_token_days: int = Field(default=7, ge=1)
+
+    @field_validator("jwt_secret_key")
+    @classmethod
+    def check_jwt_secret_key_length(cls, key: SecretStr) -> SecretStr:
+        """Refuse a JWT secret shorter than 32 characters (in every environment).
+
+        Raises:
+            ValueError: If the key is too short to resist offline guessing.
+        """
+        if len(key.get_secret_value()) < MIN_SECRET_KEY_LENGTH:
+            raise ValueError(
+                f"JWT_SECRET_KEY must be at least {MIN_SECRET_KEY_LENGTH} characters. Create one "
+                'with: python -c "import secrets; print(secrets.token_urlsafe(48))"'
+            )
+        return key
 
     @model_validator(mode="after")
     def check_production_secret_key(self) -> Self:

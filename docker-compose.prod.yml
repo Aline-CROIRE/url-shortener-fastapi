@@ -15,6 +15,7 @@ services:
       BASE_URL: ${BASE_URL:-http://localhost:8000}
       SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY}  # signs the login cookie
       SESSION_HTTPS_ONLY: ${SESSION_HTTPS_ONLY:-false}  # true once served over HTTPS
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?set JWT_SECRET_KEY (32+ random characters)}  # signs tokens
     depends_on:
       migrate:
         condition: service_completed_successfully # never start on an outdated schema
@@ -29,6 +30,8 @@ services:
     command: alembic upgrade head
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-url_shortener}
+      # Alembic loads the same Settings, which require a JWT key (it is not used here)
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?set JWT_SECRET_KEY (32+ random characters)}
     depends_on:
       db:
         condition: service_healthy
