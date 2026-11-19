@@ -21,6 +21,8 @@ idna==3.20
 
 # Security: Argon2id password hashing (pwdlib, on top of argon2-cffi), signed session cookies
 pwdlib[argon2]==0.4.2
+# JWT access and refresh tokens (HS256)
+PyJWT==2.15.1
 argon2-cffi==25.1.0
 argon2-cffi-bindings==26.2.0
 cffi==2.1.1

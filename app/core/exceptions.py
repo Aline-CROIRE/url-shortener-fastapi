@@ -104,6 +104,17 @@ class InvalidCredentialsError(AppError):
     message = "The email or password is wrong."
 
 
+class InvalidTokenError(AppError):
+    """Raised for any bad JWT: forged, expired, malformed or the wrong type (401).
+
+    One message for every case, so an attacker learns nothing about why it failed.
+    """
+
+    status_code = 401
+    code = "invalid_token"
+    message = "The token is invalid or has expired."
+
+
 class ShortCodeGenerationError(AppError):
     """Raised when no unique short code could be generated (500 Internal Server Error)."""
 
