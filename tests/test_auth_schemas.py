@@ -55,6 +55,33 @@ def test_register_rejects_bad_email_and_username() -> None:
     assert error_fields(error) == {"email", "username"}
 
 
+@pytest.mark.parametrize(
+    "email",
+    [
+        "\N{CYRILLIC SMALL LETTER A}line@example.com",  # looks exactly like aline@example.com
+        "jos\N{LATIN SMALL LETTER E WITH ACUTE}@example.com",
+        "aline@xn--exmple-cua.com",  # an internationalised domain, decoded to "exämple"
+    ],
+)
+def test_register_accepts_only_ascii_emails(email: str) -> None:
+    with pytest.raises(ValidationError) as error:
+        UserRegister(email=email, password=PASSWORD)
+    assert error_fields(error) == {"email"}
+
+
+def test_register_strips_spaces_around_the_email() -> None:
+    assert UserRegister(email="  aline@example.com ", password=PASSWORD).email == (
+        "aline@example.com"
+    )
+
+
+@pytest.mark.parametrize("password", [" " * 8, "\t" * 10, " \n " * 4])
+def test_register_refuses_a_password_of_only_spaces(password: str) -> None:
+    with pytest.raises(ValidationError) as error:
+        UserRegister(email="a@example.com", password=password)
+    assert error_fields(error) == {"password"}
+
+
 def test_register_hides_the_password_when_printed() -> None:
     assert PASSWORD not in repr(UserRegister(email="a@example.com", password=PASSWORD))
 

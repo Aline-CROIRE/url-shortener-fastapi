@@ -1,5 +1,6 @@
 """Unit tests for app/core/security.py (no database, no HTTP)."""
 
+import unicodedata
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -55,6 +56,19 @@ def test_dummy_hash_is_a_real_argon2id_hash_that_matches_nothing_guessable() -> 
     assert DUMMY_HASH.startswith("$argon2id$")
     assert verify_password("", DUMMY_HASH) is False
     assert verify_password(PASSWORD, DUMMY_HASH) is False
+
+
+def test_one_accented_password_typed_two_ways_is_the_same_password() -> None:
+    # NIST SP 800-63B: normalise Unicode passwords (NFKC) before hashing, so "é" as
+    # one character and "e" + an accent mark are the same password
+    composed = unicodedata.normalize("NFC", "caf\N{LATIN SMALL LETTER E WITH ACUTE}-au-lait")
+    decomposed = unicodedata.normalize("NFD", composed)
+
+    assert verify_password(decomposed, hash_password(composed)) is True
+
+
+def test_normalising_never_merges_different_letters() -> None:
+    assert verify_password("Password-1", hash_password("password-1")) is False
 
 
 # ---------- JWT: creating tokens ----------
