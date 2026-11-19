@@ -12,6 +12,7 @@ from sqlalchemy.orm import InstrumentedAttribute, joinedload, selectinload
 from app.models import URL, Tag
 
 MAX_LIMIT = 100
+MAX_POPULAR_LIMIT = 100
 
 # What URLRead needs, loaded together with the URLs (relationships are lazy="raise"):
 #   owner: many-to-one  -> joinedload   (JOIN in the same query: adds columns, not rows)
@@ -20,8 +21,11 @@ MAX_LIMIT = 100
 # = 2 queries for any number of URLs, never 1 + N.
 WITH_OWNER_AND_TAGS = (joinedload(URL.owner), selectinload(URL.tags))
 
-# Where the previous page ended: (value of the sort column, id)
-CursorPosition = tuple[datetime | int, int]
+# Where the previous page ended: (created_at, id) of its last URL.
+# Only the "newest" order has pages: created_at and id never change, so a bookmark
+# stays correct. click_count changes on every visit, so a "most clicked" bookmark
+# would skip or repeat URLs that moved while the client was paging.
+CursorPosition = tuple[datetime, int]
 
 
 def utc_now() -> datetime:
@@ -32,8 +36,8 @@ def utc_now() -> datetime:
 class URLSort(StrEnum):
     """The ways a URL list can be sorted."""
 
-    NEWEST = "newest"  # created_at DESC, id DESC
-    MOST_CLICKED = "most_clicked"  # click_count DESC, id DESC
+    NEWEST = "newest"  # created_at DESC, id DESC (has pages)
+    MOST_CLICKED = "most_clicked"  # click_count DESC, id DESC (one "top N" page)
 
 
 @dataclass(frozen=True)
@@ -57,7 +61,7 @@ def sort_column(sort: URLSort) -> InstrumentedAttribute[Any]:
 
 
 class URLRepository:
-    """All database access for short URLs (like a Django Manager: URL.objects).
+    """All database access for short URLs.
 
     The *_urls() methods return a select() statement, not results, so callers
     can keep adding .where(), .order_by() or .limit() before running it once.
@@ -72,22 +76,33 @@ class URLRepository:
 
     @staticmethod
     def active_urls(now: datetime | None = None) -> Select[tuple[URL]]:
-        """Switched on AND (no expiry OR expiry still in the future). See URL.objects."""
-        return URL.objects.active_urls(now or utc_now())
+        """Return a statement for the live URLs.
+
+        Live means: not deleted, switched on, and no expiry or expiry still in the future.
+        """
+        return select(URL).where(URL.is_live(now or utc_now()))
 
     @staticmethod
     def expired_urls(now: datetime | None = None) -> Select[tuple[URL]]:
         """Return a statement for URLs whose expiry is reached.
 
         "<=" (not "<"): a URL expiring exactly now is expired, so no URL falls
-        between active_urls() and expired_urls(). See URL.objects.
+        between active_urls() and expired_urls().
         """
-        return URL.objects.expired_urls(now or utc_now())
+        return select(URL).where(URL.is_expired(now or utc_now()))
 
     @staticmethod
     def popular_urls(limit: int = 10) -> Select[tuple[URL]]:
-        """Most clicked first; id breaks ties so the order is always the same."""
-        return URL.objects.popular_urls(limit)
+        """Return a statement for the most clicked URLs first.
+
+        The id breaks ties so the order is always the same.
+
+        Raises:
+            ValueError: If limit is not between 1 and MAX_POPULAR_LIMIT.
+        """
+        if not 1 <= limit <= MAX_POPULAR_LIMIT:
+            raise ValueError(f"limit must be between 1 and {MAX_POPULAR_LIMIT}")
+        return select(URL).order_by(URL.click_count.desc(), URL.id).limit(limit)
 
     @staticmethod
     def list_owned(
@@ -100,7 +115,12 @@ class URLRepository:
         """One owner's (not deleted) URLs, filtered, sorted, starting after a bookmark.
 
         The caller adds .limit(): keyset pagination never uses OFFSET.
+
+        Raises:
+            ValueError: If a bookmark is given for a sort other than newest.
         """
+        if after is not None and sort is not URLSort.NEWEST:
+            raise ValueError("only the newest sort can start after a bookmark")
         now = now or utc_now()
         statement = select(URL).where(URL.owner_id == owner_id, URL.deleted_at.is_(None))
 
@@ -126,14 +146,14 @@ class URLRepository:
                 )
             )
 
-        # Keyset: rows that come AFTER the bookmark in (sort value DESC, id DESC) order.
+        # Keyset: rows that come AFTER the bookmark in (created_at DESC, id DESC) order.
         # (a, b) < (x, y) compares a first, and b only when a is equal (the tie-breaker)
-        column = sort_column(sort)
         if after is not None:
-            after_value, after_id = after
-            bookmark = tuple_(literal(after_value), literal(after_id))  # sent as bind values
-            statement = statement.where(tuple_(column, URL.id) < bookmark)
+            after_created_at, after_id = after
+            bookmark = tuple_(literal(after_created_at), literal(after_id))  # bind values
+            statement = statement.where(tuple_(URL.created_at, URL.id) < bookmark)
 
+        column = sort_column(sort)
         return statement.order_by(column.desc(), URL.id.desc()).options(*WITH_OWNER_AND_TAGS)
 
     # ---------- running statements ----------
@@ -156,13 +176,20 @@ class URLRepository:
         """Return the URL with this short code (deleted ones too), or None."""
         return await self._session.scalar(select(URL).where(URL.short_code == short_code))
 
-    async def get_owned(self, short_code: str, owner_id: int) -> URL | None:
+    async def get_owned(
+        self, short_code: str, owner_id: int, *, for_update: bool = False
+    ) -> URL | None:
         """Return one NOT deleted URL of this owner, with owner and tags loaded.
 
         They are loaded now because async code cannot lazy-load them later.
         Someone else's URL -> None.
+
+        for_update=True adds SELECT ... FOR UPDATE OF urls: the URL row stays locked
+        until the transaction ends, so a second update of the same URL waits here
+        and then reads the FIRST update's result (fresh tags), instead of both
+        working from the same old tags and mixing their tag lists.
         """
-        return await self._session.scalar(
+        statement = (
             select(URL)
             .where(
                 URL.short_code == short_code,
@@ -171,6 +198,11 @@ class URLRepository:
             )
             .options(*WITH_OWNER_AND_TAGS)
         )
+        if for_update:
+            # OF urls: lock only the URL row. The owner comes in through a LEFT JOIN,
+            # and Postgres refuses FOR UPDATE on the nullable side of an outer join.
+            statement = statement.with_for_update(of=URL)
+        return await self._session.scalar(statement)
 
     async def owned_url_id(self, short_code: str, owner_id: int) -> int | None:
         """Just the id of one NOT deleted URL of this owner (nothing else is loaded)."""
@@ -201,11 +233,14 @@ class URLRepository:
         Postgres reads and writes the value in one step under a row lock, so two
         visits at the same moment both count (no "lost update"). Reading the
         number into Python, adding 1 and writing it back would lose one of them.
+
+        updated_at keeps its value: a visit is not an edit. Without it, the
+        onupdate=now() of TimestampMixin would set updated_at on every click.
         """
         await self._session.execute(
             update(URL)
             .where(URL.id == url_id)
-            .values(click_count=URL.click_count + 1)
+            .values(click_count=URL.click_count + 1, updated_at=URL.updated_at)
             # the URL object in this session may be stale now; don't try to
             # recompute it in Python, just leave it for a fresh read if needed
             .execution_options(synchronize_session=False)
