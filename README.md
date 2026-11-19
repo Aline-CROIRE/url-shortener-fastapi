@@ -65,7 +65,7 @@ flowchart LR
 | Routes | `app/api/routes` | Receive the request, validate it with a Pydantic schema, return the response |
 | Schemas | `app/schemas` | Describe the JSON coming in and going out |
 | Services | `app/services` | Business rules (expired, deleted, alias taken, ...) and the database transaction |
-| Repositories | `app/repositories` | Every SQL query lives here (like Django model managers) |
+| Repositories | `app/repositories` | Every SQL query lives here, including ready-made ones like `active_urls()` |
 | Models | `app/models` | The database tables, written with SQLAlchemy |
 
 Each request gets its own database session through FastAPI dependencies
@@ -113,14 +113,10 @@ erDiagram
         int id PK
         string email UK "required"
         string username UK
-        string first_name
-        string last_name
         string hashed_password
         boolean is_active "default true"
-        boolean is_staff "default false"
-        boolean is_superuser "default false"
         boolean is_premium "default false"
-        enum tier "free, premium or admin"
+        enum tier "free, premium or admin (the only admin switch)"
         timestamp last_login "nullable"
         timestamp created_at "date joined"
         timestamp updated_at
@@ -281,7 +277,10 @@ curl -X POST http://localhost:8000/api/v1/urls/ -b cookies.txt \
 curl "http://localhost:8000/api/v1/urls/?limit=20&sort=newest&tag=Marketing" -b cookies.txt
 ```
 
-Optional filters: `tag`, `is_active`, `expired`, `search`. Sort: `newest` or `most_clicked`.
+Optional filters: `tag`, `is_active`, `expired`, `search`. Sort: `newest` (has pages) or `most_clicked`
+(one "top N" list without a next page: click counts change on every visit, so a cursor
+on them would skip or repeat URLs; cursors are built only on `created_at` and `id`, which
+never change).
 Results are paginated: pass the returned `next_cursor` as `?cursor=...` to get the next page.
 
 ### Errors
@@ -293,7 +292,24 @@ All errors use the same format:
 ```
 
 Common status codes: `401` not logged in or wrong password, `404` not found, `409` alias,
-email or username already taken, `410` link expired or deleted, `422` invalid input.
+email or username already taken, `410` link expired or deleted, `422` invalid input
+(also `redirect_loop`: an original URL pointing back to this shortener is refused, because
+the short link would redirect to itself), `503` with `Retry-After` when Postgres cancelled
+the request because of a conflicting one (deadlock): nothing was saved, so it is safe to
+send again.
+
+### Requests at the same moment
+
+- **Same new tags, different order:** tags are always inserted in sorted order, so the second
+  request waits its turn instead of deadlocking.
+- **Two updates of one URL:** the update reads the URL with `SELECT ... FOR UPDATE`, so the
+  second waits for the first and then starts from its result (no mixed tag lists). Lock order
+  is always the URL row first, then tags; redirects only lock the URL row.
+- **A visit is not an edit:** counting a click keeps `updated_at` unchanged.
+- **Cache vs. a change (cache-aside race):** a visitor may read a link from the database just
+  before the owner deletes it and write it to Redis just after. To stop that late write,
+  invalidating writes a 30-second "invalidated" marker (tombstone) and filling the cache uses
+  `SET ... NX` (only if the key is empty), so the deleted link is never served from Redis.
 
 ## Tests
 
