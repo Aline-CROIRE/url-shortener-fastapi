@@ -5,7 +5,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from sqlalchemy import CheckConstraint, DateTime, Enum, String, false, true
-from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym, validates
+from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from app.db.base import Base, TimestampMixin
 
@@ -14,19 +14,11 @@ if TYPE_CHECKING:  # only for type checkers: avoids a circular import at runtime
 
 
 class UserTier(StrEnum):
-    """The fixed list of membership levels.
-
-    Like Django choices: the VALUE is stored ("free"), the LABEL is shown ("Free").
-    """
+    """The fixed list of membership levels; the value ("free") is stored."""
 
     FREE = "free"
     PREMIUM = "premium"
     ADMIN = "admin"
-
-    @property
-    def label(self) -> str:
-        """Return the human-friendly name of the tier, e.g. "Free"."""
-        return self.value.capitalize()  # "Free", "Premium", "Admin"
 
     @property
     def has_premium_features(self) -> bool:
@@ -37,9 +29,8 @@ class UserTier(StrEnum):
 class User(TimestampMixin, Base):
     """The users table: a person who owns short URLs.
 
-    Mirrors Django's AbstractUser (username, first_name, last_name, email,
-    is_staff, is_active, is_superuser, last_login, date_joined) plus is_premium
-    and tier. Login logic and password hashing arrive in Module 7.
+    The tier decides what a user may do: free, premium or admin (one field, so
+    there is no second "is admin" flag that could disagree with it).
     """
 
     __tablename__ = "users"
@@ -52,15 +43,11 @@ class User(TimestampMixin, Base):
     )
 
     email: Mapped[str] = mapped_column(String(255), unique=True)
-    username: Mapped[str] = mapped_column(String(150), unique=True)  # Django's max length
-    first_name: Mapped[str] = mapped_column(String(150), default="", server_default="")
-    last_name: Mapped[str] = mapped_column(String(150), default="", server_default="")
-    # Only the one-way hash is ever stored, never the real password (hashing: Module 7)
+    username: Mapped[str] = mapped_column(String(150), unique=True)
+    # Only the one-way hash is ever stored, never the real password
     hashed_password: Mapped[str] = mapped_column(String(255))
-    # Account switches, as in AbstractUser (used by authentication in Module 7)
+    # False = the account is switched off and cannot log in
     is_active: Mapped[bool] = mapped_column(default=True, server_default=true())
-    is_staff: Mapped[bool] = mapped_column(default=False, server_default=false())
-    is_superuser: Mapped[bool] = mapped_column(default=False, server_default=false())
     last_login: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     is_premium: Mapped[bool] = mapped_column(default=False, server_default=false())
@@ -74,9 +61,6 @@ class User(TimestampMixin, Base):
         default=UserTier.FREE,
         server_default=UserTier.FREE.value,
     )
-
-    # Django's name for the moment the account was created: the same column as created_at
-    date_joined = synonym("created_at")
 
     urls: Mapped[list["URL"]] = relationship(
         back_populates="owner",

@@ -22,8 +22,6 @@ def make_user() -> User:
         id=1,
         email="aline@example.com",
         username="aline",
-        first_name="Aline",
-        last_name="Tester",
         hashed_password="secret-hash",
         is_active=True,
         tier=UserTier.FREE,  # also sets is_premium=False
@@ -78,7 +76,7 @@ def test_user_read_never_shows_the_password_hash() -> None:
 
     assert "hashed_password" not in data
     assert data["tier"] == "free"
-    assert (data["first_name"], data["is_active"], data["is_premium"]) == ("Aline", True, False)
+    assert (data["username"], data["is_active"], data["is_premium"]) == ("aline", True, False)
     assert data["email"] == "aline@example.com"
 
 
