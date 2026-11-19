@@ -79,7 +79,9 @@ async def create_url(
     summary="List your short URLs",
     description=(
         "Keyset (cursor) pagination: pass `next_cursor` from one page as `cursor` to get "
-        "the next. Filters are combined with AND and only applied when given."
+        "the next. `most_clicked` is one top list (up to `limit` URLs, no next page), "
+        "because click counts change while you page. Filters are combined with AND and "
+        "only applied when given."
     ),
     responses={**INVALID_CURSOR, **VALIDATION_ERROR, **INTERNAL_ERROR},
 )
@@ -89,7 +91,9 @@ async def list_urls(
     settings: SettingsDep,
     limit: Annotated[int, Query(ge=1, le=MAX_LIMIT, description="Page size")] = 20,
     cursor: Annotated[str | None, Query(description="next_cursor from the previous page")] = None,
-    sort: Annotated[URLSort, Query(description="newest or most_clicked")] = URLSort.NEWEST,
+    sort: Annotated[
+        URLSort, Query(description="newest (has pages) or most_clicked (one top list)")
+    ] = URLSort.NEWEST,
     tag: Annotated[
         str | None,
         Query(min_length=1, max_length=TAG_NAME_MAX_LENGTH, description="Tag name (any case)"),

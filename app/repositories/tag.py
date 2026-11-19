@@ -34,6 +34,12 @@ class TagRepository:
         INSERT ... ON CONFLICT DO NOTHING skips names that already exist (in any
         letter case), even if another request creates the same tag at the same
         moment. Existing tags keep their original spelling.
+
+        The names are inserted in sorted (lower-case) order. Postgres makes an
+        insert wait while another transaction holds the same new, not yet
+        committed name. If two requests inserted ["web", "python"] and
+        ["python", "web"], each could wait for the other forever (a deadlock).
+        With one fixed order the second request simply waits its turn.
         """
         wanted: dict[str, str] = {}  # lower-case name -> first spelling given
         for name in names:
@@ -43,7 +49,8 @@ class TagRepository:
 
         await self._session.execute(
             insert(Tag)
-            .values([{"name": name} for name in wanted.values()])
+            # same order for every request: no deadlock (see the docstring)
+            .values([{"name": wanted[key]} for key in sorted(wanted)])
             .on_conflict_do_nothing()
         )
         found = await self._session.scalars(

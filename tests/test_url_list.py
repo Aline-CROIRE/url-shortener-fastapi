@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import URL, User
 from app.repositories import TagRepository
-from app.repositories.url import URLSort
+from app.repositories.url import URLFilters, URLRepository, URLSort
 from app.services.pagination import encode_cursor
 
 API = "/api/v1/urls"
@@ -107,7 +107,9 @@ def test_newest_orders_by_created_at_then_id(
     assert pages == 4
 
 
-def test_most_clicked_pages_with_ties(db_client: TestClient, owner_id: int, run_db: RunDb) -> None:
+def test_most_clicked_is_one_top_list_with_ties(
+    db_client: TestClient, owner_id: int, run_db: RunDb
+) -> None:
     clicks = [3, 1, 3, 0, 2, 3, 1, 0, 2, 5]
     created = seed(run_db, owner_id, *[{"click_count": c} for c in clicks])
     expected = [
@@ -117,10 +119,25 @@ def test_most_clicked_pages_with_ties(db_client: TestClient, owner_id: int, run_
         )
     ]  # click_count DESC, then id DESC
 
-    codes, _ = page_through(db_client, limit=3, sort="most_clicked")
+    body = db_client.get(API, params={"limit": 4, "sort": "most_clicked"}).json()
 
-    assert codes == expected
-    assert len(set(codes)) == len(clicks)
+    assert [item["short_code"] for item in body["items"]] == expected[:4]
+    # No next page: a bookmark on click counts would skip URLs that get clicks meanwhile
+    assert body["next_cursor"] is None
+
+
+def test_most_clicked_refuses_a_cursor(db_client: TestClient, owner_id: int) -> None:
+    cursor = encode_cursor((NOW, 1))
+
+    response = db_client.get(API, params={"sort": "most_clicked", "cursor": cursor})
+
+    assert response.status_code == 400
+    assert "without a cursor" in response.json()["error"]["message"]
+
+
+def test_only_newest_can_start_after_a_bookmark() -> None:
+    with pytest.raises(ValueError, match="only the newest sort"):
+        URLRepository.list_owned(1, URLFilters(), URLSort.MOST_CLICKED, after=(NOW, 1))
 
 
 def test_new_url_created_between_pages_causes_no_repeats(
@@ -298,7 +315,7 @@ def test_unknown_sort_is_rejected(db_client: TestClient, owner_id: int) -> None:
 
 @pytest.mark.parametrize(
     "cursor",
-    ["garbage", encode_cursor(URLSort.MOST_CLICKED, (3, 1))],  # wrong sort for the default "newest"
+    ["garbage", "eyJzb3J0IjoibW9zdF9jbGlja2VkIiwidmFsdWVzIjpbMywxXX0"],  # old most_clicked one
 )
 def test_bad_cursor_returns_400(db_client: TestClient, owner_id: int, cursor: str) -> None:
     response = db_client.get(API, params={"cursor": cursor})

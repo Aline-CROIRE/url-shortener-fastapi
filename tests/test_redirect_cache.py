@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.api.dependencies import get_redirect_cache
 from app.cache import CachedRedirect, NullRedirectCache, RedisRedirectCache
+from app.cache.redirect_cache import TOMBSTONE, TOMBSTONE_SECONDS
 from app.core.config import Settings
 from app.main import create_app
 from app.repositories import ClickRepository
@@ -22,7 +23,7 @@ TTL = 900
 
 
 class FakeRedis:
-    """Just enough of redis.asyncio.Redis: GET, SET with EX, DELETE, PING."""
+    """Just enough of redis.asyncio.Redis: GET, SET with EX and NX, DELETE, PING."""
 
     def __init__(self) -> None:
         self.data: dict[str, str] = {}
@@ -37,8 +38,12 @@ class FakeRedis:
         self._check()
         return self.data.get(key)
 
-    async def set(self, key: str, value: str, ex: int | None = None) -> bool:
+    async def set(
+        self, key: str, value: str, ex: int | None = None, nx: bool = False
+    ) -> bool | None:
         self._check()
+        if nx and key in self.data:
+            return None  # like Redis: NX and the key exists -> nothing written
         self.data[key] = value
         if ex is not None:
             self.ttls[key] = ex
@@ -129,7 +134,7 @@ def test_link_that_expired_while_cached_returns_410(
 
     assert response.status_code == 410
     assert response.json()["error"]["code"] == "url_expired"
-    assert key(code) not in fake_redis.data  # the expired entry was removed
+    assert fake_redis.data[key(code)] == TOMBSTONE  # the expired entry was replaced
 
 
 # ---------- invalidation ----------
@@ -143,7 +148,8 @@ def test_put_invalidates_so_the_new_target_is_used(
 
     db_client.put(f"{API}/{code}", json={"original_url": "https://fastapi.tiangolo.com/"})
 
-    assert key(code) not in fake_redis.data
+    assert fake_redis.data[key(code)] == TOMBSTONE
+    assert fake_redis.ttls[key(code)] == TOMBSTONE_SECONDS
     assert db_client.get(f"/{code}").headers["location"] == "https://fastapi.tiangolo.com/"
 
 
@@ -178,7 +184,7 @@ def test_stale_entry_for_a_url_that_no_longer_exists_returns_404(
     response = db_client.get("/ghost1")
 
     assert response.status_code == 404  # the click INSERT failed its foreign key -> DB path
-    assert key("ghost1") not in fake_redis.data
+    assert fake_redis.data[key("ghost1")] == TOMBSTONE
 
 
 def test_other_database_errors_on_a_cache_hit_are_not_hidden(
@@ -225,12 +231,73 @@ def test_broken_cache_entry_is_treated_as_a_miss(
     code = create(db_client)
     fake_redis.data[key(code)] = "{not valid json"
 
-    assert db_client.get(f"/{code}").status_code == 302
+    assert db_client.get(f"/{code}").status_code == 302  # removed, then cached again
     assert CachedRedirect.from_json(fake_redis.data[key(code)]).original_url == TARGET  # repaired
+
+
+@pytest.mark.anyio
+async def test_broken_entry_stays_if_redis_fails_while_removing_it() -> None:
+    fake = FakeRedis()
+    fake.data[key("bad1")] = "{not valid json"
+
+    async def failing_delete(key: str) -> int:
+        raise RedisConnectionError("Connection refused")
+
+    fake.delete = failing_delete  # type: ignore[method-assign]
+
+    assert await RedisRedirectCache(fake, TTL).get("bad1") is None  # still just a miss
 
 
 def test_health_shows_the_cache_is_ok(db_client: TestClient, fake_redis: FakeRedis) -> None:
     assert db_client.get("/health").json()["cache"] == "ok"
+
+
+# ---------- the invalidation race (a late write after a change) ----------
+
+
+@pytest.mark.anyio
+async def test_late_write_after_invalidate_is_refused() -> None:
+    """The timeline from the review, step by step.
+
+    1. visitor: cache miss, reads the database: the link is live
+    2. owner:   deletes the link, commits, invalidates the cache
+    3. visitor: writes what it read in step 1 (now stale) to the cache
+    Without protection the deleted link would redirect for 15 minutes.
+    """
+    fake = FakeRedis()
+    cache = RedisRedirectCache(fake, TTL)
+    now = datetime(2026, 11, 12, 12, 0, tzinfo=UTC)
+    read_before_delete = CachedRedirect(1, TARGET, None)  # step 1
+
+    await cache.invalidate("race1")  # step 2
+    await cache.set("race1", read_before_delete, now)  # step 3: refused (NX)
+
+    assert await cache.get("race1") is None  # the database will answer: 410
+    assert fake.data[key("race1")] == TOMBSTONE
+
+
+@pytest.mark.anyio
+async def test_invalidate_overwrites_an_entry_written_just_before() -> None:
+    fake = FakeRedis()
+    cache = RedisRedirectCache(fake, TTL)
+    now = datetime(2026, 11, 12, 12, 0, tzinfo=UTC)
+
+    await cache.set("race2", CachedRedirect(1, TARGET, None), now)  # visitor first
+    await cache.invalidate("race2")  # then the owner's change
+
+    assert await cache.get("race2") is None
+
+
+def test_link_is_cached_again_after_the_tombstone_ends(
+    db_client: TestClient, owner_id: int, fake_redis: FakeRedis
+) -> None:
+    code = create(db_client)
+    db_client.put(f"{API}/{code}", json={"title": "new"})  # tombstone written
+    del fake_redis.data[key(code)]  # Redis removes it by itself after 30 seconds
+
+    db_client.get(f"/{code}")
+
+    assert CachedRedirect.from_json(fake_redis.data[key(code)]).original_url == TARGET
 
 
 # ---------- small units ----------

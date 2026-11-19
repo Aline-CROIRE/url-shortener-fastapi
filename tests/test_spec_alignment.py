@@ -1,8 +1,8 @@
 """Alignment with the project specification (rubric review fixes):
 
 1. paths with a trailing slash are served directly (no 307 redirect)
-2. URL.objects is a Django-style manager
-3. User mirrors AbstractUser and is_premium always matches tier
+2. the ready-made URL queries live in the repository (no Django-style manager)
+3. User has only the columns the app uses, and is_premium always matches tier
 4. referrer is stored only when it is a real http(s) URL
 """
 
@@ -22,7 +22,6 @@ from app.api.visitor import clean_referrer
 from app.core.config import get_settings
 from app.main import app as real_app
 from app.models import URL, Click, User, UserTier
-from app.models.url import URLManager
 from app.repositories import URLRepository
 from tests.conftest import alembic_config
 
@@ -67,25 +66,15 @@ def test_swagger_documents_the_specification_paths() -> None:
     assert "/api/v1/urls" not in paths  # the alias works but is not listed twice
 
 
-# ---------- 2. the manager ----------
+# ---------- 2. ready-made queries in the repository ----------
 
 
-def test_url_objects_is_a_manager_not_a_column() -> None:
-    assert isinstance(URL.objects, URLManager)
-    assert "objects" not in URL.__table__.columns
-
-
-def test_repository_reuses_the_manager() -> None:
-    def sql(statement: Any) -> str:
-        return str(statement.compile())
-
-    assert sql(URLRepository.active_urls()) == sql(URL.objects.active_urls())
-    assert sql(URLRepository.expired_urls()) == sql(URL.objects.expired_urls())
-    assert sql(URLRepository.popular_urls(5)) == sql(URL.objects.popular_urls(5))
+def test_there_is_no_django_style_manager() -> None:
+    assert not hasattr(URL, "objects")
 
 
 @pytest.mark.anyio
-async def test_manager_queries_run_and_compose(db_session: AsyncSession) -> None:
+async def test_repository_queries_run_and_compose(db_session: AsyncSession) -> None:
     owner = User(email="m@example.com", username="manager", hashed_password="h")
     db_session.add_all(
         [
@@ -96,10 +85,10 @@ async def test_manager_queries_run_and_compose(db_session: AsyncSession) -> None
     await db_session.flush()
 
     live = (
-        await db_session.scalars(URL.objects.active_urls().where(URL.owner_id == owner.id))
+        await db_session.scalars(URLRepository.active_urls().where(URL.owner_id == owner.id))
     ).all()
     top = (
-        await db_session.scalars(URL.objects.popular_urls(1).where(URL.owner_id == owner.id))
+        await db_session.scalars(URLRepository.popular_urls(1).where(URL.owner_id == owner.id))
     ).all()
 
     assert [u.short_code for u in live] == ["live01"]
@@ -108,23 +97,24 @@ async def test_manager_queries_run_and_compose(db_session: AsyncSession) -> None
 
 def test_popular_urls_limit_is_checked() -> None:
     with pytest.raises(ValueError, match="between 1 and 100"):
-        URL.objects.popular_urls(101)
+        URLRepository.popular_urls(101)
 
 
-# ---------- 3. User like AbstractUser, is_premium follows tier ----------
+# ---------- 3. User columns, is_premium follows tier ----------
 
 
 @pytest.mark.anyio
-async def test_user_has_the_abstractuser_fields_with_defaults(db_session: AsyncSession) -> None:
+async def test_user_has_only_the_columns_the_app_uses(db_session: AsyncSession) -> None:
     user = User(email="a@example.com", username="u" * 150, hashed_password="h")  # 150 = max
     db_session.add(user)
     await db_session.flush()
     await db_session.refresh(user)
 
-    assert (user.first_name, user.last_name) == ("", "")
-    assert (user.is_active, user.is_staff, user.is_superuser) == (True, False, False)
-    assert user.last_login is None
-    assert user.date_joined == user.created_at  # the same column, Django's name
+    assert (user.is_active, user.last_login) == (True, None)
+    # The Django AbstractUser copies are gone: tier = 'admin' is the only admin switch
+    for column in ("first_name", "last_name", "is_staff", "is_superuser"):
+        assert column not in User.__table__.columns
+    assert not hasattr(User, "date_joined")
 
 
 @pytest.mark.anyio
@@ -144,10 +134,6 @@ def test_setting_the_tier_sets_is_premium(tier: UserTier, premium: bool) -> None
     user.tier = tier
 
     assert user.is_premium is premium
-
-
-def test_tier_labels() -> None:
-    assert [tier.label for tier in UserTier] == ["Free", "Premium", "Admin"]
 
 
 @pytest.mark.anyio
