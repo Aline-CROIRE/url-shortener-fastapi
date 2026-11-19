@@ -37,8 +37,8 @@ def clip(value: str | None, max_length: int) -> str | None:
 def clean_referrer(value: str | None) -> str | None:
     """Keep the Referer header only when it is a real http(s) URL.
 
-    This works like Django's URLField. Anything else ("", "android-app://...",
-    random text) becomes None, which analytics shows as "Direct".
+    It must have an http or https scheme and a host. Anything else ("",
+    "android-app://...", random text) becomes None, which analytics shows as "Direct".
     """
     referrer = clip(value, MAX_REFERRER_LENGTH)
     if referrer is None:

@@ -1,11 +1,19 @@
 """The URL service: create, list, read, update and delete an owner's short URLs."""
 
+from urllib.parse import urlsplit
+
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.cache import NullRedirectCache, RedirectCache
-from app.core.exceptions import AliasTakenError, ShortCodeGenerationError, UrlNotFoundError
+from app.core.exceptions import (
+    AliasTakenError,
+    InvalidCursorError,
+    RedirectLoopError,
+    ShortCodeGenerationError,
+    UrlNotFoundError,
+)
 from app.db.errors import unique_violation_constraint
 from app.models import URL
 from app.repositories import TagRepository, URLRepository, UserRepository
@@ -33,13 +41,31 @@ class URLService:
         users: UserRepository,
         tags: TagRepository,
         cache: RedirectCache | None = None,
+        base_url: str | None = None,
     ) -> None:
         """Keep the session, repositories and cache (no cache -> a cache that stores nothing)."""
+        # base_url is this shortener's own address (the BASE_URL setting): original
+        # URLs on the same host are refused, because they would loop
         self._session = session
         self._urls = urls
         self._users = users
         self._tags = tags
         self._cache = cache or NullRedirectCache()
+        self._own_host = urlsplit(base_url).hostname if base_url else None
+
+    def _refuse_own_links(self, original_url: str) -> None:
+        """Refuse an original URL that points back to this shortener.
+
+        Example: abc1234 -> http://our-host/abc1234 would redirect to itself forever
+        (and count a click each time); two links pointing at each other loop too.
+        Only the host is compared (hostname is lower-cased), so another scheme or
+        port on our host is refused as well.
+
+        Raises:
+            RedirectLoopError: If the original URL's host is our own host.
+        """
+        if self._own_host is not None and urlsplit(original_url).hostname == self._own_host:
+            raise RedirectLoopError(original_url)
 
     async def create(self, data: URLCreate, owner_id: int) -> URL:
         """Save the URL and its tags together.
@@ -50,9 +76,11 @@ class URLService:
 
         Raises:
             AliasTakenError: If the chosen alias is already used.
+            RedirectLoopError: If the original URL points back to this shortener.
             ShortCodeGenerationError: If no free random code was found after
                 MAX_CODE_ATTEMPTS tries.
         """
+        self._refuse_own_links(str(data.original_url))
         attempts = 1 if data.custom_alias else MAX_CODE_ATTEMPTS
         for _ in range(attempts):
             short_code = data.custom_alias or generate_code()
@@ -86,10 +114,22 @@ class URLService:
     ) -> tuple[list[URL], str | None]:
         """Return one page of the owner's URLs and the cursor of the next page (or None).
 
+        "newest" has pages. "most_clicked" is ONE "top N" page (next cursor always
+        None): click counts change on every visit, so a bookmark on them would skip
+        or repeat URLs that moved between two requests.
+
         Raises:
-            InvalidCursorError: If the cursor text is broken or belongs to another sort.
+            InvalidCursorError: If the cursor text is broken, or sent with most_clicked.
         """
-        after = decode_cursor(cursor, sort) if cursor else None
+        if sort is URLSort.MOST_CLICKED:
+            if cursor:
+                raise InvalidCursorError(
+                    "most_clicked is a top list with one page: send it without a cursor."
+                )
+            statement = self._urls.list_owned(owner_id, filters, sort)
+            return await self._urls.fetch_all(statement.limit(limit)), None
+
+        after = decode_cursor(cursor) if cursor else None
         statement = self._urls.list_owned(owner_id, filters, sort, after)
         # Ask for ONE extra row: if it exists, there is a next page (no COUNT(*) needed)
         rows = await self._urls.fetch_all(statement.limit(limit + 1))
@@ -97,8 +137,7 @@ class URLService:
         if len(rows) <= limit:
             return page, None
         last = page[-1]
-        value = last.created_at if sort is URLSort.NEWEST else last.click_count
-        return page, encode_cursor(sort, (value, last.id))
+        return page, encode_cursor((last.created_at, last.id))
 
     async def get(self, short_code: str, owner_id: int) -> URL:
         """Return one of the owner's URLs.
@@ -118,16 +157,20 @@ class URLService:
 
         Raises:
             UrlNotFoundError: If the URL does not exist or is not the owner's.
+            RedirectLoopError: If the new original URL points back to this shortener.
         """
         changes = data.model_dump(exclude_unset=True)
+        if "original_url" in changes:
+            changes["original_url"] = str(changes["original_url"])
+            self._refuse_own_links(changes["original_url"])  # before any database work
         async with self._session.begin():
-            url = await self._urls.get_owned(short_code, owner_id)
+            # Lock order: the URL row first, then tags (sorted). Two updates of one
+            # URL take turns; redirects lock only the URL row, so no lock cycle.
+            url = await self._urls.get_owned(short_code, owner_id, for_update=True)
             if url is None:
                 raise UrlNotFoundError(short_code)
 
             new_tags = changes.pop("tags", None)
-            if "original_url" in changes:
-                changes["original_url"] = str(changes["original_url"])
             for field, value in changes.items():
                 setattr(url, field, value)
             if new_tags is not None:

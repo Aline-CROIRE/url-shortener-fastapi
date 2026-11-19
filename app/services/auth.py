@@ -39,8 +39,6 @@ class AuthService:
         user = User(
             email=data.email,
             username=data.username,
-            first_name=data.first_name,
-            last_name=data.last_name,
             hashed_password=hashed,
         )
         try:

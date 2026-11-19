@@ -8,12 +8,12 @@ from typing import Any, cast
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ExceptionHandler
 
 from app.core.exceptions import AppError, ConflictError
-from app.db.errors import unique_violation_constraint
+from app.db.errors import is_retryable, unique_violation_constraint
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +80,23 @@ async def integrity_error_handler(request: Request, exc: IntegrityError) -> JSON
     return await app_error_handler(request, conflict)
 
 
+async def database_error_handler(request: Request, exc: DBAPIError) -> JSONResponse:
+    """Turn a deadlock or serialization failure into a 503 the client can retry.
+
+    Postgres rolled the whole transaction back, so nothing was half-saved and the
+    same request can be sent again. Any other database error is a 500.
+    """
+    if not is_retryable(exc):
+        return await unhandled_exception_handler(request, exc)
+    logger.warning("Retryable database conflict on %s %s", request.method, request.url.path)
+    return error_response(
+        status.HTTP_503_SERVICE_UNAVAILABLE,
+        "try_again",
+        "The server was busy with a conflicting request. Please try again.",
+        headers={"Retry-After": "1"},
+    )
+
+
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """Log an unexpected error and return a general 500 without details."""
     # Full stack trace goes to the server log only, never to the client
@@ -100,6 +117,8 @@ def register_exception_handlers(app: FastAPI) -> None:
         (StarletteHTTPException, http_exception_handler),
         (RequestValidationError, validation_exception_handler),
         (IntegrityError, integrity_error_handler),
+        # other database errors (IntegrityError, a subclass, keeps its own handler)
+        (DBAPIError, database_error_handler),
         (Exception, unhandled_exception_handler),
     ]
     for exception_class, handler in handlers:

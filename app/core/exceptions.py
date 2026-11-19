@@ -80,6 +80,23 @@ class AliasTakenError(ConflictError):
         )
 
 
+class RedirectLoopError(AppError):
+    """The original URL points back to this shortener, so it would loop (422)."""
+
+    status_code = 422
+    code = "redirect_loop"
+
+    def __init__(self, original_url: str) -> None:
+        """Build the error for the refused original URL."""
+        super().__init__(
+            message=(
+                "The original URL cannot point to this URL shortener itself: "
+                "the short link would redirect to itself (or to another short link) in a loop."
+            ),
+            details={"original_url": original_url},
+        )
+
+
 class InvalidCursorError(AppError):
     """The pagination cursor is broken, forged or from another sort order (400)."""
 

@@ -1,7 +1,7 @@
 """make is_premium a property of tier
 
 Revision ID: b240b1339160
-Revises: dfe41766eb04
+Revises: 69806811406c
 Create Date: 2026-11-19 08:51:00
 
 tier becomes the single source of truth: is_premium is now a read-only Python
@@ -18,7 +18,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = "b240b1339160"
-down_revision: Union[str, Sequence[str], None] = "dfe41766eb04"
+down_revision: Union[str, Sequence[str], None] = "69806811406c"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

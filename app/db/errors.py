@@ -1,8 +1,16 @@
 """Helpers to read PostgreSQL error details from SQLAlchemy errors."""
 
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 
 UNIQUE_VIOLATION = "23505"  # PostgreSQL error code (SQLSTATE) for a duplicate unique value
+# Postgres cancelled the transaction only because of other transactions running at the
+# same moment; nothing was saved, so the same request can safely be sent again
+RETRYABLE_SQLSTATES = frozenset({"40P01", "40001"})  # deadlock, serialization failure
+
+
+def is_retryable(exc: DBAPIError) -> bool:
+    """Return True if the transaction was cancelled by a deadlock or serialization failure."""
+    return getattr(exc.orig, "sqlstate", None) in RETRYABLE_SQLSTATES
 
 
 def unique_violation_constraint(exc: IntegrityError) -> str | None:

@@ -104,10 +104,13 @@ def get_url_service(
     users: UserRepoDep,
     tags: TagRepoDep,
     cache: RedirectCacheDep,
+    settings: SettingsDep,
 ) -> URLService:
     """Build the URL service for create, update and delete (write side)."""
-    # WRITE side: create / update / delete
-    return URLService(session=db, urls=urls, users=users, tags=tags, cache=cache)
+    # WRITE side: create / update / delete. base_url lets it refuse links to itself.
+    return URLService(
+        session=db, urls=urls, users=users, tags=tags, cache=cache, base_url=settings.base_url
+    )
 
 
 URLServiceDep = Annotated[URLService, Depends(get_url_service)]

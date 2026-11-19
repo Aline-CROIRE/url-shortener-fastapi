@@ -78,6 +78,19 @@ def test_every_visit_is_counted(db_client: TestClient, run_db: RunDb) -> None:
     assert len(clicks) == 3  # the counter and the clicks table always agree
 
 
+def test_a_visit_does_not_change_updated_at(db_client: TestClient, run_db: RunDb) -> None:
+    # A fixed old time: now() would be the same inside the test's one transaction
+    last_edit = datetime(2026, 1, 1, tzinfo=UTC)
+    code = seed_url(run_db, updated_at=last_edit)
+
+    assert db_client.get(f"/{code}").status_code == 302
+
+    async def updated_at(session: AsyncSession) -> datetime | None:
+        return await session.scalar(select(URL.updated_at).where(URL.short_code == code))
+
+    assert run_db(updated_at) == last_edit  # a click is not an edit
+
+
 def test_custom_alias_redirects(db_client: TestClient, run_db: RunDb) -> None:
     seed_url(run_db, short_code="py-docs", custom_alias="py-docs")
 
