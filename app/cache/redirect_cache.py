@@ -3,6 +3,15 @@
 Only LIVE links are cached, with just what a redirect needs. Every Redis problem
 is logged and treated like a cache miss ("fail open"): the app then simply uses
 the database. The cache can make redirects faster, never make them fail.
+
+The invalidation race, and how it is closed:
+    visitor: cache miss -> reads the DB (link live)
+    owner:                                  deletes the link, commits, invalidates
+    visitor: writes the OLD entry to the cache  <- would redirect for 15 minutes
+So invalidate() does not just delete the key: it writes a short-lived TOMBSTONE
+("this link just changed"), and set() writes only if the key is EMPTY (SET NX).
+The visitor's late write finds the tombstone and is refused. get() treats the
+tombstone as a miss, so the database answers until it expires.
 """
 
 import json
@@ -19,6 +28,10 @@ logger = logging.getLogger(__name__)
 # A version in the key: if the cached shape ever changes, bump it and old keys are ignored
 KEY_PREFIX = "redirect:v1:"
 REDIS_ERRORS = (RedisError, OSError)
+TOMBSTONE = "invalidated"  # not JSON, so it can never be mistaken for an entry
+# Longer than the gap between a request's database read and its cache write
+# (milliseconds); short enough that the link is cached again soon after
+TOMBSTONE_SECONDS = 30
 
 
 @dataclass(frozen=True)
@@ -67,7 +80,7 @@ class RedirectCache(Protocol):
         ...
 
     async def invalidate(self, short_code: str) -> None:
-        """Remove the cached entry for this short code."""
+        """Make sure the old entry is not used any more (the next lookup is a miss)."""
         ...
 
     async def ping(self) -> bool | None:
@@ -133,27 +146,45 @@ class RedisRedirectCache:
             return None
         if raw is None:
             return None  # miss
+        text = raw if isinstance(raw, str) else raw.decode()
+        if text == TOMBSTONE:
+            return None  # just changed: let the database answer
         try:
-            return CachedRedirect.from_json(raw if isinstance(raw, str) else raw.decode())
+            return CachedRedirect.from_json(text)
         except (ValueError, KeyError, TypeError):
-            logger.warning("Ignoring a broken cache entry for %s", short_code)
+            logger.warning("Removing a broken cache entry for %s", short_code)
+            # set() never overwrites (NX), so the broken entry must go first
+            try:
+                await self._client.delete(self.key(short_code))
+            except REDIS_ERRORS:
+                logger.warning("Redis unavailable: broken entry for %s kept", short_code)
             return None
 
     async def set(self, short_code: str, entry: CachedRedirect, now: datetime) -> None:
-        """Store the entry until its TTL ends; skip it if Redis is down."""
+        """Store the entry until its TTL ends, but only if the key is empty.
+
+        A tombstone (written by invalidate) blocks the write: this entry may have
+        been read from the database just BEFORE the link changed. Skipped if Redis is down.
+        """
         ttl = self.ttl_for(entry, now)
         if ttl < 1:
             return  # expires in under a second: not worth caching
         try:
-            # SET key value EX ttl: Redis deletes the key by itself after ttl seconds
-            await self._client.set(self.key(short_code), entry.to_json(), ex=ttl)
+            # SET key value EX ttl NX: only if the key does not exist (nx=True);
+            # Redis deletes the key by itself after ttl seconds
+            await self._client.set(self.key(short_code), entry.to_json(), ex=ttl, nx=True)
         except REDIS_ERRORS:
             logger.warning("Redis unavailable: %s not cached", short_code, exc_info=True)
 
     async def invalidate(self, short_code: str) -> None:
-        """Delete the cached entry so the next redirect reads the database."""
+        """Replace the cached entry with a short-lived tombstone.
+
+        The next redirects read the database, and a late set() of an old entry is
+        refused while the tombstone lives (see the module docstring).
+        """
         try:
-            await self._client.delete(self.key(short_code))
+            # A plain SET (no NX): always overwrites, whatever is cached now
+            await self._client.set(self.key(short_code), TOMBSTONE, ex=TOMBSTONE_SECONDS)
         except REDIS_ERRORS:
             # Worst case the old entry lives until its TTL ends (at most 15 minutes)
             logger.error("Could not invalidate cached redirect %s", short_code, exc_info=True)
