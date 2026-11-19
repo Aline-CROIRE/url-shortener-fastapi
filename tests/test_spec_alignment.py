@@ -2,7 +2,7 @@
 
 1. paths with a trailing slash are served directly (no 307 redirect)
 2. URL.objects is a Django-style manager
-3. User mirrors AbstractUser and is_premium always matches tier
+3. User mirrors AbstractUser; is_premium is a read-only property of tier (Module 7)
 4. referrer is stored only when it is a real http(s) URL
 """
 
@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select, text
-from sqlalchemy.exc import DBAPIError, IntegrityError
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -111,7 +111,7 @@ def test_popular_urls_limit_is_checked() -> None:
         URL.objects.popular_urls(101)
 
 
-# ---------- 3. User like AbstractUser, is_premium follows tier ----------
+# ---------- 3. User like AbstractUser, is_premium worked out from tier ----------
 
 
 @pytest.mark.anyio
@@ -150,19 +150,27 @@ def test_tier_labels() -> None:
     assert [tier.label for tier in UserTier] == ["Free", "Premium", "Admin"]
 
 
+def test_is_premium_cannot_be_set_directly() -> None:
+    user = User(email="d@example.com", username="d", hashed_password="h")
+
+    with pytest.raises(AttributeError):
+        user.is_premium = True  # type: ignore[misc]  # read-only on purpose
+
+
+def test_new_user_without_a_tier_is_not_premium() -> None:
+    # tier's default ("free") is only applied on INSERT; until then it is None
+    assert User(email="e@example.com", username="e", hashed_password="h").is_premium is False
+
+
 @pytest.mark.anyio
-@pytest.mark.parametrize(
-    "sql",
-    [
-        "INSERT INTO users (email, username, hashed_password, tier, is_premium) "
-        "VALUES ('x@x.com', 'x', 'h', 'free', true)",
-        "INSERT INTO users (email, username, hashed_password, tier, is_premium) "
-        "VALUES ('y@x.com', 'y', 'h', 'premium', false)",
-    ],
-)
-async def test_database_refuses_a_contradiction(db_session: AsyncSession, sql: str) -> None:
-    with pytest.raises(IntegrityError, match="ck_users_is_premium_matches_tier"):
-        await db_session.execute(text(sql))
+async def test_is_premium_is_no_longer_a_column(db_session: AsyncSession) -> None:
+    result = await db_session.scalars(
+        text("SELECT column_name FROM information_schema.columns WHERE table_name = 'users'")
+    )
+    columns = set(result.all())
+
+    assert "tier" in columns
+    assert "is_premium" not in columns
 
 
 def test_migration_repairs_old_contradicting_rows() -> None:
@@ -187,7 +195,8 @@ def test_migration_repairs_old_contradicting_rows() -> None:
                 "VALUES ('old@x.com', 'old', 'h', 'free', true)"
             )
         )
-        command.upgrade(config, "head")  # repair, then add the rule
+        # repair, then add the rule (stop there: the next migration drops the column)
+        command.upgrade(config, "dfe41766eb04")
         repaired = asyncio.run(
             run("SELECT is_premium FROM users WHERE email = 'old@x.com'", read=True)
         )
@@ -233,3 +242,40 @@ def test_redirect_stores_only_valid_referrers(
         return list(rows)
 
     assert run_db(referrers) == [None, "https://twitter.com/"]
+
+
+def test_is_premium_migration_downgrades_and_upgrades_without_losing_data() -> None:
+    """Down: the column comes back, filled from tier. Up again: it is gone."""
+    url = get_settings().test_database_url
+    config = alembic_config(url)
+
+    async def run(sql: str, *, read: bool = False) -> Any:
+        engine = create_async_engine(url, poolclass=NullPool)
+        async with engine.begin() as connection:
+            result = await connection.execute(text(sql))
+            value = result.scalar() if read else None
+        await engine.dispose()
+        return value
+
+    columns_sql = (
+        "SELECT count(*) FROM information_schema.columns "
+        "WHERE table_name = 'users' AND column_name = 'is_premium'"
+    )
+    try:
+        asyncio.run(
+            run(
+                "INSERT INTO users (email, username, hashed_password, tier) "
+                "VALUES ('vip@x.com', 'vip', 'h', 'premium')"
+            )
+        )
+        command.downgrade(config, "dfe41766eb04")  # before the column was dropped
+        restored = asyncio.run(
+            run("SELECT is_premium FROM users WHERE email = 'vip@x.com'", read=True)
+        )
+        assert restored is True  # worked out again from tier
+
+        command.upgrade(config, "head")
+        assert asyncio.run(run(columns_sql, read=True)) == 0
+    finally:
+        command.upgrade(config, "head")
+        asyncio.run(run("DELETE FROM users WHERE email = 'vip@x.com'"))

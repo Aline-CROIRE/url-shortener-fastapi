@@ -143,7 +143,6 @@ async def seed_database(
             "username": f"seed_user{i}",
             "hashed_password": "!",  # unusable: nobody can log in as a seed user
             "tier": UserTier.PREMIUM if i % 10 == 0 else UserTier.FREE,
-            "is_premium": i % 10 == 0,
         }
         for i in range(counts.users)
     ]
