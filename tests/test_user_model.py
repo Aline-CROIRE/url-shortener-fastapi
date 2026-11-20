@@ -38,16 +38,15 @@ async def test_server_defaults_work_without_python(db_session: AsyncSession) -> 
             "INSERT INTO users (email, username, hashed_password) VALUES ('raw@x.com', 'raw', 'h')"
         )
     )
-    row = (
-        await db_session.execute(text("SELECT is_premium, tier FROM users WHERE username = 'raw'"))
-    ).one()
+    tier = (
+        await db_session.execute(text("SELECT tier FROM users WHERE username = 'raw'"))
+    ).scalar_one()
 
-    assert row.is_premium is False
-    assert row.tier == "free"
+    assert tier == "free"
 
 
 async def test_tier_is_stored_as_its_value(db_session: AsyncSession) -> None:
-    db_session.add(make_user(tier=UserTier.PREMIUM, is_premium=True))
+    db_session.add(make_user(tier=UserTier.PREMIUM))
     await db_session.flush()
 
     stored = (await db_session.execute(text("SELECT tier::text FROM users"))).scalar_one()

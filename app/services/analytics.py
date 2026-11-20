@@ -2,7 +2,7 @@
 
 from datetime import datetime, time, timedelta
 
-from app.core.exceptions import UrlNotFoundError
+from app.core.exceptions import ForbiddenError, UrlNotFoundError
 from app.repositories import ClickRepository, URLRepository
 from app.repositories.url import utc_now
 from app.schemas.analytics import (
@@ -37,22 +37,36 @@ class AnalyticsService:
         self._clicks = clicks
 
     async def for_url(
-        self, short_code: str, owner_id: int, days: int, now: datetime | None = None
+        self,
+        short_code: str,
+        actor_id: int,
+        days: int,
+        now: datetime | None = None,
+        *,
+        is_admin: bool = False,
     ) -> URLAnalytics:
-        """Build the analytics report of one of the owner's URLs.
+        """Build the analytics report of one URL, for its owner or an Admin.
+
+        The tier (Premium or Admin) is checked before this, by the route's
+        dependency; this method checks the OWNER.
 
         Args:
             short_code: The short code of the URL.
-            owner_id: The id of the user who must own the URL.
+            actor_id: The id of the user asking.
             days: How many days the clicks_per_day list covers (today included).
             now: The current time; tests pass a fixed value.
+            is_admin: True lets the caller see any URL's analytics.
 
         Raises:
-            UrlNotFoundError: If the URL does not exist, is someone else's, or is deleted.
+            UrlNotFoundError: If the URL does not exist or is deleted.
+            ForbiddenError: If it is someone else's and the caller is not an Admin.
         """
-        url_id = await self._urls.owned_url_id(short_code, owner_id)
-        if url_id is None:  # unknown, someone else's, or deleted
+        found = await self._urls.id_and_owner_id(short_code)
+        if found is None:  # unknown or deleted
             raise UrlNotFoundError(short_code)
+        url_id, owner_id = found
+        if owner_id != actor_id and not is_admin:
+            raise ForbiddenError()
 
         now = now or utc_now()
         clicks = self._clicks

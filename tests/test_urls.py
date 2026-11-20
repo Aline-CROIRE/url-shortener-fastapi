@@ -213,13 +213,14 @@ def test_badly_formed_code_returns_422(db_client: TestClient, owner_id: int) -> 
         assert error_code(response) == "validation_error"
 
 
-def test_someone_elses_url_is_not_found(
+def test_someone_elses_url_is_forbidden(
     db_client: TestClient, owner_id: int, other_owners_code: str
 ) -> None:
-    # 404, not 403: we do not even reveal that the code exists
-    assert db_client.get(f"{API}/{other_owners_code}").status_code == 404
-    assert db_client.put(f"{API}/{other_owners_code}", json={"title": "x"}).status_code == 404
-    assert db_client.delete(f"{API}/{other_owners_code}").status_code == 404
+    # Module 7, decision 6: 403, not 404. The code is not a secret (the public
+    # redirect already answers for it), so saying "it is not yours" leaks nothing new.
+    assert db_client.get(f"{API}/{other_owners_code}").status_code == 403
+    assert db_client.put(f"{API}/{other_owners_code}", json={"title": "x"}).status_code == 403
+    assert db_client.delete(f"{API}/{other_owners_code}").status_code == 403
 
 
 # ---------- PUT /api/v1/urls/{short_code} ----------

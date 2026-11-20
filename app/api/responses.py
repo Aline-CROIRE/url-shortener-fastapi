@@ -47,9 +47,23 @@ CONFLICT: dict[int | str, dict[str, Any]] = {
 }
 UNAUTHORIZED: dict[int | str, dict[str, Any]] = {
     status.HTTP_401_UNAUTHORIZED: _error_doc(
-        "Not logged in",
-        "not_authenticated",
-        "Log in first: POST /api/v1/auth/login/.",
+        "No token, or a bad, expired or wrong-type token",
+        "invalid_token",
+        "The token is invalid or has expired.",
+    ),
+}
+FORBIDDEN: dict[int | str, dict[str, Any]] = {
+    status.HTTP_403_FORBIDDEN: _error_doc(
+        "Not allowed: someone else's URL, a Premium feature, or the Free limit",
+        "forbidden",
+        "You do not have permission to access this URL.",
+    ),
+}
+TOO_MANY_REQUESTS: dict[int | str, dict[str, Any]] = {
+    status.HTTP_429_TOO_MANY_REQUESTS: _error_doc(
+        "Too many attempts from this client (see the Retry-After header)",
+        "too_many_requests",
+        "Too many attempts from your address. Please try again later (see Retry-After).",
     ),
 }
 INVALID_CURSOR: dict[int | str, dict[str, Any]] = {

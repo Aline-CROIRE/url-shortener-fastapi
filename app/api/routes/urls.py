@@ -2,22 +2,29 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Body, Query, Response, status
+from fastapi import APIRouter, Body, Query, Request, Response, status
+from pydantic import AfterValidator
 
-from app.api.auth import CurrentOwnerId
+from app.api.auth import CurrentUser
 from app.api.dependencies import SettingsDep, URLReadServiceDep, URLServiceDep
 from app.api.params import ShortCodePath
+from app.api.permissions import is_admin
 from app.api.responses import (
     CONFLICT,
+    FORBIDDEN,
     INTERNAL_ERROR,
     INVALID_CURSOR,
     NOT_FOUND,
+    TOO_MANY_REQUESTS,
+    UNAUTHORIZED,
     VALIDATION_ERROR,
 )
 from app.core.config import Settings
+from app.core.rate_limit import create_url_rate_limit, limiter, user_rate_limit_key
 from app.models import URL
 from app.models.tag import TAG_NAME_MAX_LENGTH
 from app.repositories.url import MAX_LIMIT, URLFilters, URLSort
+from app.schemas.base import refuse_nul
 from app.schemas.url import URLCreate, URLPage, URLRead, URLUpdate
 
 router = APIRouter(prefix="/urls", tags=["URLs"])
@@ -59,17 +66,32 @@ def to_url_read(url: URL, settings: Settings) -> URLRead:
     "/",
     status_code=status.HTTP_201_CREATED,
     summary="Create a short URL",
-    description="URL and tags are saved in one transaction. A custom alias becomes the short code.",
-    responses={**CONFLICT, **VALIDATION_ERROR, **INTERNAL_ERROR},
+    description=(
+        "URL and tags are saved in one transaction. A custom alias becomes the short code. "
+        "At most 30 new URLs per minute per user (429 after that)."
+    ),
+    responses={
+        **UNAUTHORIZED,
+        **FORBIDDEN,
+        **CONFLICT,
+        **TOO_MANY_REQUESTS,
+        **VALIDATION_ERROR,
+        **INTERNAL_ERROR,
+    },
 )
+# Per USER (the token's), not per IP: stops mass creation of spam or phishing links,
+# also by a create/delete loop. Runs after get_current_user, so anonymous calls get
+# 401 and are never counted.
+@limiter.shared_limit(create_url_rate_limit, scope="create_url", key_func=user_rate_limit_key)
 async def create_url(
+    request: Request,  # slowapi reads the user id stored on it
     payload: Annotated[URLCreate, Body(openapi_examples=CREATE_EXAMPLES)],
     service: URLServiceDep,
-    owner_id: CurrentOwnerId,
+    user: CurrentUser,
     settings: SettingsDep,
 ) -> URLRead:
     """Create a short URL."""
-    url = await service.create(payload, owner_id)
+    url = await service.create(payload, user.id)  # the owner always comes from the token
     return to_url_read(url, settings)
 
 
@@ -79,20 +101,25 @@ async def create_url(
     summary="List your short URLs",
     description=(
         "Keyset (cursor) pagination: pass `next_cursor` from one page as `cursor` to get "
-        "the next. Filters are combined with AND and only applied when given."
+        "the next. `most_clicked` is one top list (up to `limit` URLs, no next page), "
+        "because click counts change while you page. Filters are combined with AND and "
+        "only applied when given."
     ),
-    responses={**INVALID_CURSOR, **VALIDATION_ERROR, **INTERNAL_ERROR},
+    responses={**UNAUTHORIZED, **INVALID_CURSOR, **VALIDATION_ERROR, **INTERNAL_ERROR},
 )
 async def list_urls(
     service: URLReadServiceDep,  # read side (replica)
-    owner_id: CurrentOwnerId,
+    user: CurrentUser,
     settings: SettingsDep,
     limit: Annotated[int, Query(ge=1, le=MAX_LIMIT, description="Page size")] = 20,
     cursor: Annotated[str | None, Query(description="next_cursor from the previous page")] = None,
-    sort: Annotated[URLSort, Query(description="newest or most_clicked")] = URLSort.NEWEST,
+    sort: Annotated[
+        URLSort, Query(description="newest (has pages) or most_clicked (one top list)")
+    ] = URLSort.NEWEST,
     tag: Annotated[
         str | None,
         Query(min_length=1, max_length=TAG_NAME_MAX_LENGTH, description="Tag name (any case)"),
+        AfterValidator(refuse_nul),
     ] = None,
     is_active: Annotated[
         bool | None, Query(description="Only switched on (true) or off (false)")
@@ -101,52 +128,55 @@ async def list_urls(
         bool | None, Query(description="Only expired (true) or not expired (false)")
     ] = None,
     search: Annotated[
-        str | None, Query(min_length=1, max_length=200, description="Text in the URL or title")
+        str | None,
+        Query(min_length=1, max_length=200, description="Text in the URL or title"),
+        AfterValidator(refuse_nul),
     ] = None,
 ) -> URLPage:
     """List your short URLs."""
     filters = URLFilters(tag=tag, is_active=is_active, expired=expired, search=search)
-    urls, next_cursor = await service.list_page(owner_id, filters, sort, limit, cursor)
+    # Only your own URLs, also for an Admin: a list is "mine", not "everyone's"
+    urls, next_cursor = await service.list_page(user.id, filters, sort, limit, cursor)
     return URLPage(items=[to_url_read(url, settings) for url in urls], next_cursor=next_cursor)
 
 
 @router.get("/{short_code}", include_in_schema=False)
 @router.get(
     "/{short_code}/",
-    summary="Get one of your short URLs",
+    summary="Get one of your short URLs (Admin: any)",
     description="With its owner, tags and click count. Does not count as a visit.",
-    responses={**NOT_FOUND, **VALIDATION_ERROR, **INTERNAL_ERROR},
+    responses={**UNAUTHORIZED, **FORBIDDEN, **NOT_FOUND, **VALIDATION_ERROR, **INTERNAL_ERROR},
 )
 async def get_url(
     short_code: ShortCodePath,
     service: URLReadServiceDep,  # read side (replica)
-    owner_id: CurrentOwnerId,
+    user: CurrentUser,
     settings: SettingsDep,
 ) -> URLRead:
     """Get one of your short URLs."""
-    url = await service.get(short_code, owner_id)  # someone else's or deleted -> 404
+    url = await service.get(short_code, user.id, is_admin=is_admin(user))
     return to_url_read(url, settings)
 
 
 @router.put("/{short_code}", include_in_schema=False)
 @router.put(
     "/{short_code}/",
-    summary="Update one of your short URLs",
+    summary="Update one of your short URLs (Admin: any)",
     description=(
         "Only the fields you send are changed; `tags` replaces all tags. "
         "The short code and alias cannot change (shared links would break)."
     ),
-    responses={**NOT_FOUND, **VALIDATION_ERROR, **INTERNAL_ERROR},
+    responses={**UNAUTHORIZED, **FORBIDDEN, **NOT_FOUND, **VALIDATION_ERROR, **INTERNAL_ERROR},
 )
 async def update_url(
     short_code: ShortCodePath,
     payload: Annotated[URLUpdate, Body(openapi_examples=UPDATE_EXAMPLES)],
     service: URLServiceDep,
-    owner_id: CurrentOwnerId,
+    user: CurrentUser,
     settings: SettingsDep,
 ) -> URLRead:
     """Update one of your short URLs."""
-    url = await service.update(short_code, owner_id, payload)
+    url = await service.update(short_code, user.id, payload, is_admin=is_admin(user))
     return to_url_read(url, settings)
 
 
@@ -154,16 +184,16 @@ async def update_url(
 @router.delete(
     "/{short_code}/",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Delete one of your short URLs",
+    summary="Delete one of your short URLs (Admin: any)",
     description=(
         "Soft delete: the link stops working (410) and disappears from your URLs, "
         "but its code is never given to anyone else and its click history is kept."
     ),
-    responses={**NOT_FOUND, **VALIDATION_ERROR, **INTERNAL_ERROR},
+    responses={**UNAUTHORIZED, **FORBIDDEN, **NOT_FOUND, **VALIDATION_ERROR, **INTERNAL_ERROR},
 )
 async def delete_url(
-    short_code: ShortCodePath, service: URLServiceDep, owner_id: CurrentOwnerId
+    short_code: ShortCodePath, service: URLServiceDep, user: CurrentUser
 ) -> Response:
     """Delete one of your short URLs."""
-    await service.delete(short_code, owner_id)
+    await service.delete(short_code, user.id, is_admin=is_admin(user))
     return Response(status_code=status.HTTP_204_NO_CONTENT)

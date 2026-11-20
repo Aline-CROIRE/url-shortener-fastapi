@@ -4,8 +4,33 @@ name: CI
 on:
   push:
   pull_request:
+  # Every Monday at 06:00 UTC: new vulnerabilities are published all the time, so the
+  # dependency audit must also run in weeks without a push
+  schedule:
+    - cron: "0 6 * * 1"
 
 jobs:
+  # OWASP A03:2025 Software Supply Chain Failures: fail if any pinned package has a
+  # known vulnerability (checked against the PyPI / OSV advisory databases)
+  dependency-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install pip-audit
+        run: pip install pip-audit==2.10.1
+
+      # --no-deps --disable-pip: every version is pinned, so the exact versions in the
+      # files are checked as they are (no installing or resolving needed)
+      - name: Check pinned packages for known vulnerabilities
+        run: >-
+          pip-audit -r requirements.txt -r requirements-dev.txt
+          --no-deps --disable-pip --progress-spinner off
+
   checks:
     runs-on: ubuntu-latest
 

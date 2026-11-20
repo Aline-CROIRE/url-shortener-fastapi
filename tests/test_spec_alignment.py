@@ -1,8 +1,8 @@
 """Alignment with the project specification (rubric review fixes):
 
 1. paths with a trailing slash are served directly (no 307 redirect)
-2. URL.objects is a Django-style manager
-3. User mirrors AbstractUser and is_premium always matches tier
+2. the ready-made URL queries live in the repository (no Django-style manager)
+3. User has only the columns the app uses; is_premium is a read-only property of tier
 4. referrer is stored only when it is a real http(s) URL
 """
 
@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select, text
-from sqlalchemy.exc import DBAPIError, IntegrityError
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -22,7 +22,6 @@ from app.api.visitor import clean_referrer
 from app.core.config import get_settings
 from app.main import app as real_app
 from app.models import URL, Click, User, UserTier
-from app.models.url import URLManager
 from app.repositories import URLRepository
 from tests.conftest import alembic_config
 
@@ -67,25 +66,15 @@ def test_swagger_documents_the_specification_paths() -> None:
     assert "/api/v1/urls" not in paths  # the alias works but is not listed twice
 
 
-# ---------- 2. the manager ----------
+# ---------- 2. ready-made queries in the repository ----------
 
 
-def test_url_objects_is_a_manager_not_a_column() -> None:
-    assert isinstance(URL.objects, URLManager)
-    assert "objects" not in URL.__table__.columns
-
-
-def test_repository_reuses_the_manager() -> None:
-    def sql(statement: Any) -> str:
-        return str(statement.compile())
-
-    assert sql(URLRepository.active_urls()) == sql(URL.objects.active_urls())
-    assert sql(URLRepository.expired_urls()) == sql(URL.objects.expired_urls())
-    assert sql(URLRepository.popular_urls(5)) == sql(URL.objects.popular_urls(5))
+def test_there_is_no_django_style_manager() -> None:
+    assert not hasattr(URL, "objects")
 
 
 @pytest.mark.anyio
-async def test_manager_queries_run_and_compose(db_session: AsyncSession) -> None:
+async def test_repository_queries_run_and_compose(db_session: AsyncSession) -> None:
     owner = User(email="m@example.com", username="manager", hashed_password="h")
     db_session.add_all(
         [
@@ -96,10 +85,10 @@ async def test_manager_queries_run_and_compose(db_session: AsyncSession) -> None
     await db_session.flush()
 
     live = (
-        await db_session.scalars(URL.objects.active_urls().where(URL.owner_id == owner.id))
+        await db_session.scalars(URLRepository.active_urls().where(URL.owner_id == owner.id))
     ).all()
     top = (
-        await db_session.scalars(URL.objects.popular_urls(1).where(URL.owner_id == owner.id))
+        await db_session.scalars(URLRepository.popular_urls(1).where(URL.owner_id == owner.id))
     ).all()
 
     assert [u.short_code for u in live] == ["live01"]
@@ -108,23 +97,24 @@ async def test_manager_queries_run_and_compose(db_session: AsyncSession) -> None
 
 def test_popular_urls_limit_is_checked() -> None:
     with pytest.raises(ValueError, match="between 1 and 100"):
-        URL.objects.popular_urls(101)
+        URLRepository.popular_urls(101)
 
 
-# ---------- 3. User like AbstractUser, is_premium follows tier ----------
+# ---------- 3. User columns, is_premium worked out from tier ----------
 
 
 @pytest.mark.anyio
-async def test_user_has_the_abstractuser_fields_with_defaults(db_session: AsyncSession) -> None:
+async def test_user_has_only_the_columns_the_app_uses(db_session: AsyncSession) -> None:
     user = User(email="a@example.com", username="u" * 150, hashed_password="h")  # 150 = max
     db_session.add(user)
     await db_session.flush()
     await db_session.refresh(user)
 
-    assert (user.first_name, user.last_name) == ("", "")
-    assert (user.is_active, user.is_staff, user.is_superuser) == (True, False, False)
-    assert user.last_login is None
-    assert user.date_joined == user.created_at  # the same column, Django's name
+    assert (user.is_active, user.last_login) == (True, None)
+    # The Django AbstractUser copies are gone: tier = 'admin' is the only admin switch
+    for column in ("first_name", "last_name", "is_staff", "is_superuser"):
+        assert column not in User.__table__.columns
+    assert not hasattr(User, "date_joined")
 
 
 @pytest.mark.anyio
@@ -146,23 +136,27 @@ def test_setting_the_tier_sets_is_premium(tier: UserTier, premium: bool) -> None
     assert user.is_premium is premium
 
 
-def test_tier_labels() -> None:
-    assert [tier.label for tier in UserTier] == ["Free", "Premium", "Admin"]
+def test_is_premium_cannot_be_set_directly() -> None:
+    user = User(email="d@example.com", username="d", hashed_password="h")
+
+    with pytest.raises(AttributeError):
+        user.is_premium = True  # type: ignore[misc]  # read-only on purpose
+
+
+def test_new_user_without_a_tier_is_not_premium() -> None:
+    # tier's default ("free") is only applied on INSERT; until then it is None
+    assert User(email="e@example.com", username="e", hashed_password="h").is_premium is False
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize(
-    "sql",
-    [
-        "INSERT INTO users (email, username, hashed_password, tier, is_premium) "
-        "VALUES ('x@x.com', 'x', 'h', 'free', true)",
-        "INSERT INTO users (email, username, hashed_password, tier, is_premium) "
-        "VALUES ('y@x.com', 'y', 'h', 'premium', false)",
-    ],
-)
-async def test_database_refuses_a_contradiction(db_session: AsyncSession, sql: str) -> None:
-    with pytest.raises(IntegrityError, match="ck_users_is_premium_matches_tier"):
-        await db_session.execute(text(sql))
+async def test_is_premium_is_no_longer_a_column(db_session: AsyncSession) -> None:
+    result = await db_session.scalars(
+        text("SELECT column_name FROM information_schema.columns WHERE table_name = 'users'")
+    )
+    columns = set(result.all())
+
+    assert "tier" in columns
+    assert "is_premium" not in columns
 
 
 def test_migration_repairs_old_contradicting_rows() -> None:
@@ -187,7 +181,8 @@ def test_migration_repairs_old_contradicting_rows() -> None:
                 "VALUES ('old@x.com', 'old', 'h', 'free', true)"
             )
         )
-        command.upgrade(config, "head")  # repair, then add the rule
+        # repair, then add the rule (stop there: the next migration drops the column)
+        command.upgrade(config, "dfe41766eb04")
         repaired = asyncio.run(
             run("SELECT is_premium FROM users WHERE email = 'old@x.com'", read=True)
         )
@@ -233,3 +228,40 @@ def test_redirect_stores_only_valid_referrers(
         return list(rows)
 
     assert run_db(referrers) == [None, "https://twitter.com/"]
+
+
+def test_is_premium_migration_downgrades_and_upgrades_without_losing_data() -> None:
+    """Down: the column comes back, filled from tier. Up again: it is gone."""
+    url = get_settings().test_database_url
+    config = alembic_config(url)
+
+    async def run(sql: str, *, read: bool = False) -> Any:
+        engine = create_async_engine(url, poolclass=NullPool)
+        async with engine.begin() as connection:
+            result = await connection.execute(text(sql))
+            value = result.scalar() if read else None
+        await engine.dispose()
+        return value
+
+    columns_sql = (
+        "SELECT count(*) FROM information_schema.columns "
+        "WHERE table_name = 'users' AND column_name = 'is_premium'"
+    )
+    try:
+        asyncio.run(
+            run(
+                "INSERT INTO users (email, username, hashed_password, tier) "
+                "VALUES ('vip@x.com', 'vip', 'h', 'premium')"
+            )
+        )
+        command.downgrade(config, "dfe41766eb04")  # before the column was dropped
+        restored = asyncio.run(
+            run("SELECT is_premium FROM users WHERE email = 'vip@x.com'", read=True)
+        )
+        assert restored is True  # worked out again from tier
+
+        command.upgrade(config, "head")
+        assert asyncio.run(run(columns_sql, read=True)) == 0
+    finally:
+        command.upgrade(config, "head")
+        asyncio.run(run("DELETE FROM users WHERE email = 'vip@x.com'"))

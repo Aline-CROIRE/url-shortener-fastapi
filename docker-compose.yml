@@ -19,6 +19,8 @@ services:
       # Reads go to the replica when set (start it with: --profile replica). Empty = primary.
       DATABASE_REPLICA_URL: ${DATABASE_REPLICA_URL:-}
       BASE_URL: http://localhost:8000
+      # Your JWT_SECRET_KEY from .env; this dev-only fallback lets a fresh clone start
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-dev-only-jwt-secret-key-for-docker-compose}
       # Windows/macOS do not send file-change events into containers; poll instead
       WATCHFILES_FORCE_POLLING: "true"
     volumes:
@@ -36,6 +38,8 @@ services:
     command: alembic upgrade head
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/url_shortener
+      # Alembic loads the same Settings, which require a JWT key (it is not used here)
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-dev-only-jwt-secret-key-for-docker-compose}
     volumes:
       - ./alembic:/app/alembic # new migrations are picked up without rebuilding
       - ./app:/app/app

@@ -8,14 +8,18 @@ from typing import Any, cast
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ExceptionHandler
 
+from app.core.client import client_ip
 from app.core.exceptions import AppError, ConflictError
-from app.db.errors import unique_violation_constraint
+from app.core.logging import clean_for_log
+from app.core.middleware import SECURITY_HEADERS
+from app.db.errors import is_retryable, unique_violation_constraint
 
 logger = logging.getLogger(__name__)
+security_logger = logging.getLogger("app.security")
 
 
 def error_response(
@@ -34,8 +38,22 @@ def error_response(
 
 
 async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
-    """Return the JSON error for one of our own AppError exceptions."""
-    return error_response(exc.status_code, exc.code, exc.message, exc.details)
+    """Return the JSON error for one of our own AppError exceptions.
+
+    Every 403 is also logged: many of them in a row can mean someone is probing
+    other users' URLs. The line says who, what and from where; never the token
+    or any header.
+    """
+    if exc.status_code == status.HTTP_403_FORBIDDEN:
+        security_logger.warning(
+            "403 %s on %s %s user_id=%s ip=%s",
+            exc.code,
+            request.method,
+            clean_for_log(request.url.path),
+            getattr(request.state, "user_id", "-"),
+            client_ip(request),
+        )
+    return error_response(exc.status_code, exc.code, exc.message, exc.details, exc.headers)
 
 
 async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
@@ -80,16 +98,40 @@ async def integrity_error_handler(request: Request, exc: IntegrityError) -> JSON
     return await app_error_handler(request, conflict)
 
 
+async def database_error_handler(request: Request, exc: DBAPIError) -> JSONResponse:
+    """Turn a deadlock or serialization failure into a 503 the client can retry.
+
+    Postgres rolled the whole transaction back, so nothing was half-saved and the
+    same request can be sent again. Any other database error is a 500.
+    """
+    if not is_retryable(exc):
+        return await unhandled_exception_handler(request, exc)
+    logger.warning(
+        "Retryable database conflict on %s %s", request.method, clean_for_log(request.url.path)
+    )
+    return error_response(
+        status.HTTP_503_SERVICE_UNAVAILABLE,
+        "try_again",
+        "The server was busy with a conflicting request. Please try again.",
+        headers={"Retry-After": "1"},
+    )
+
+
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """Log an unexpected error and return a general 500 without details."""
     # Full stack trace goes to the server log only, never to the client
-    logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+    logger.exception("Unhandled error on %s %s", request.method, clean_for_log(request.url.path))
+    # A 500 is answered by Starlette's outermost error layer, past our middlewares,
+    # so the security headers (and the request id) are added here by hand
+    headers = dict(SECURITY_HEADERS)
     request_id = getattr(request.state, "request_id", None)
+    if request_id:
+        headers["X-Request-ID"] = request_id
     return error_response(
         status.HTTP_500_INTERNAL_SERVER_ERROR,
         "internal_server_error",
         "An unexpected error occurred.",
-        headers={"X-Request-ID": request_id} if request_id else None,
+        headers=headers,
     )
 
 
@@ -100,6 +142,8 @@ def register_exception_handlers(app: FastAPI) -> None:
         (StarletteHTTPException, http_exception_handler),
         (RequestValidationError, validation_exception_handler),
         (IntegrityError, integrity_error_handler),
+        # other database errors (IntegrityError, a subclass, keeps its own handler)
+        (DBAPIError, database_error_handler),
         (Exception, unhandled_exception_handler),
     ]
     for exception_class, handler in handlers:

@@ -63,6 +63,17 @@ async def test_set_get_and_invalidate_on_real_redis(client: Redis) -> None:
     assert await cache.get("itest1") is None
 
 
+async def test_late_write_after_invalidate_is_refused_on_real_redis(client: Redis) -> None:
+    cache = RedisRedirectCache(client, ttl_seconds=900)
+    now = datetime.now(UTC)
+
+    await cache.invalidate("itest3")  # the owner's change
+    await cache.set("itest3", CachedRedirect(1, "https://old.test/", None), now)  # late write
+
+    assert await cache.get("itest3") is None  # real SET NX refused it
+    assert 0 < await client.ttl(cache.key("itest3")) <= 30  # the tombstone ends by itself
+
+
 async def test_redis_expires_the_key_by_itself(client: Redis) -> None:
     cache = RedisRedirectCache(client, ttl_seconds=1)
 

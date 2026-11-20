@@ -1,7 +1,16 @@
+import itertools
+import os
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import AbstractContextManager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+# JWT_SECRET_KEY is required (the app refuses to start without it). Set a test-only
+# value BEFORE importing the app: importing app.main already builds the settings.
+# A value already set in the environment still wins.
+TEST_JWT_SECRET_KEY = "test-only-jwt-secret-key-at-least-32-chars"
+os.environ["JWT_SECRET_KEY"] = os.environ.get("JWT_SECRET_KEY", TEST_JWT_SECRET_KEY)
 
 import pytest
 from alembic.config import Config
@@ -11,12 +20,14 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, create_async_e
 from sqlalchemy.pool import NullPool
 
 from alembic import command
-from app.api.auth import get_current_owner_id, get_session_factory
+from app.api.auth import get_current_user, get_session_factory
 from app.core.config import Settings, get_settings
+from app.core.rate_limit import limiter
+from app.core.security import create_access_token
 from app.db.database import get_db, get_read_db
 from app.db.query_counter import QueryCounter, count_queries
 from app.main import create_app
-from app.models import User
+from app.models import User, UserTier
 
 TEST_BASE_URL = "http://short.test/"  # trailing slash on purpose: it must be removed
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -108,7 +119,7 @@ def db_client(
     # Reads use the SAME test transaction, so they see the data the test wrote
     # (in production the read side may be a replica, a moment behind)
     app.dependency_overrides[get_read_db] = override_get_db
-    # The login check (who is this cookie?) opens its own short session: same test transaction
+    # The token check (whose token is this?) opens its own short session: same test transaction
     app.dependency_overrides[get_session_factory] = lambda: test_session
 
     with TestClient(app, follow_redirects=False, raise_server_exceptions=False) as test_client:
@@ -184,21 +195,74 @@ def query_counter(
 
 @pytest.fixture
 def owner_id(app: FastAPI, run_db: Callable[..., Any]) -> int:
-    """Seed a user and make the app treat them as the current owner.
+    """Seed a user and make the app treat them as the current user (no token needed).
 
-    A shortcut for tests that are not about login: no register/login request needed.
-    The real cookie login is tested in tests/test_auth.py.
+    A shortcut for the Module 5-6 tests, which are not about login or tiers. The
+    user is PREMIUM, so those tests are not limited by the Free rules (10 URLs, no
+    alias). Login is tested in tests/test_auth.py, tiers in tests/test_tiers.py.
     """
 
-    async def create_owner(session: AsyncSession) -> int:
-        user = User(email="me@example.com", username="me", hashed_password="h")
+    async def create_owner(session: AsyncSession) -> User:
+        user = User(
+            email="me@example.com", username="me", hashed_password="!", tier=UserTier.PREMIUM
+        )
         session.add(user)
         await session.flush()
-        return user.id
+        return user
 
-    user_id = run_db(create_owner)
-    app.dependency_overrides[get_current_owner_id] = lambda: user_id
-    return user_id
+    user = run_db(create_owner)
+    app.dependency_overrides[get_current_user] = lambda: user
+    return user.id
+
+
+@dataclass(frozen=True)
+class AuthedUser:
+    """A user created for a test, with the header that logs them in."""
+
+    id: int
+    email: str
+    headers: dict[str, str]
+
+
+@pytest.fixture
+def make_user(run_db: Callable[..., Any], test_settings: Settings) -> Callable[..., AuthedUser]:
+    """Create a user of any tier directly in the database and give them a real token.
+
+    Promoting users by writing to the database is what the brief asks for: there
+    is no public endpoint for changing tiers. The token is a real access token,
+    so every request goes through the real Bearer check.
+
+        free = make_user()
+        admin = make_user(UserTier.ADMIN)
+        client.get("/api/v1/urls/", headers=admin.headers)
+    """
+    numbers = itertools.count(1)
+
+    def make(tier: UserTier = UserTier.FREE, *, is_active: bool = True) -> AuthedUser:
+        name = f"{tier.value}{next(numbers)}"
+        email = f"{name}@example.com"
+
+        async def create(session: AsyncSession) -> int:
+            user = User(
+                email=email, username=name, hashed_password="!", tier=tier, is_active=is_active
+            )
+            session.add(user)
+            await session.flush()
+            return user.id
+
+        user_id = run_db(create)
+        token = create_access_token(user_id, test_settings)
+        return AuthedUser(id=user_id, email=email, headers={"Authorization": f"Bearer {token}"})
+
+    return make
+
+
+@pytest.fixture(autouse=True)
+def reset_rate_limits() -> Iterator[None]:
+    """Start every test with empty login rate-limit counters (they live in memory)."""
+    limiter.reset()
+    yield
+    limiter.reset()
 
 
 @pytest.fixture
