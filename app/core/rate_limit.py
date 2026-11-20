@@ -92,6 +92,6 @@ async def rate_limit_exceeded_handler(request: Request, exc: Exception) -> JSONR
     return error_response(
         429,
         "too_many_requests",
-        "Too many attempts from your address. Please try again later (see Retry-After).",
+        "Too many attempts. Please try again later (see Retry-After).",
         headers={"Retry-After": str(retry_after)},
     )

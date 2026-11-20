@@ -175,6 +175,20 @@ class FreeTierLimitError(ForbiddenError):
         )
 
 
+class TooManyAttemptsError(AppError):
+    """Too many attempts in a short time (429), with Retry-After."""
+
+    status_code = 429
+    code = "too_many_requests"
+    message = "Too many attempts. Please try again later (see Retry-After)."
+
+    def __init__(self, retry_after: int) -> None:
+        """Build the error with the number of seconds the client should wait."""
+        super().__init__()
+        # An instance attribute: each error carries its own wait time
+        self.headers = {"Retry-After": str(retry_after)}  # type: ignore[misc]
+
+
 class ShortCodeGenerationError(AppError):
     """Raised when no unique short code could be generated (500 Internal Server Error)."""
 

@@ -63,7 +63,7 @@ TOO_MANY_REQUESTS: dict[int | str, dict[str, Any]] = {
     status.HTTP_429_TOO_MANY_REQUESTS: _error_doc(
         "Too many attempts from this client (see the Retry-After header)",
         "too_many_requests",
-        "Too many attempts from your address. Please try again later (see Retry-After).",
+        "Too many attempts. Please try again later (see Retry-After).",
     ),
 }
 INVALID_CURSOR: dict[int | str, dict[str, Any]] = {

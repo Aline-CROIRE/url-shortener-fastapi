@@ -9,8 +9,15 @@ from datetime import UTC, datetime
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import account_limit
 from app.core.config import Settings
-from app.core.exceptions import ConflictError, InvalidCredentialsError, InvalidTokenError
+from app.core.exceptions import (
+    ConflictError,
+    InvalidCredentialsError,
+    InvalidTokenError,
+    TooManyAttemptsError,
+)
+from app.core.logging import mask_email
 from app.core.security import (
     DUMMY_HASH,
     TokenType,
@@ -135,6 +142,8 @@ class AuthService:
             InvalidCredentialsError: Unknown email, wrong password or switched-off
                 account. The same error every time, so nobody can find out which
                 emails are registered.
+            TooManyAttemptsError: This email already had LOGIN_ACCOUNT_RATE_LIMIT
+                failed logins (429), whether the account exists or not.
         """
         email = email.strip().lower()
         # A password longer than any allowed one can never be right: refuse it before
@@ -142,6 +151,11 @@ class AuthService:
         # A NUL byte can be in no stored email (and Postgres refuses it in text).
         if len(password) > PASSWORD_MAX_LENGTH or len(email) > EMAIL_MAX_LENGTH or "\x00" in email:
             raise InvalidCredentialsError()
+        # Per-ACCOUNT limit, checked before the slow hash. Unknown emails are counted
+        # the same way, so a 429 says nothing about whether the account exists.
+        if account_limit.is_blocked(email):
+            security_logger.warning("Account login limit hit for %s", mask_email(email))
+            raise TooManyAttemptsError(account_limit.retry_after_seconds())
 
         async with self._session.begin():  # a short read; closed before hashing
             user = await self._users.get_by_email(email)
@@ -152,8 +166,10 @@ class AuthService:
         # Always ONE slow verification, even for an unknown email (same response time)
         password_ok = await run_password_work(verify_password, password, stored_hash)
         if user_id is None or not password_ok or not is_active:
+            account_limit.record_failure(email)
             raise InvalidCredentialsError()
 
+        account_limit.clear_failures(email)  # the real user is in: forget the typos
         async with self._session.begin():
             await self._users.record_login(user_id)
             await self._refresh_tokens.delete_expired(user_id)  # housekeeping
