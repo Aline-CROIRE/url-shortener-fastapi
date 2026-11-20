@@ -12,11 +12,14 @@ owner filter is always applied), so tampering cannot reveal anyone else's data.
 import base64
 import binascii
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from app.core.exceptions import InvalidCursorError
 from app.repositories.url import CursorPosition, URLSort
+
+# The largest value of a Postgres INTEGER column (urls.id)
+MAX_ROW_ID = 2**31 - 1
 
 
 def encode_cursor(position: CursorPosition) -> str:
@@ -41,9 +44,23 @@ def decode_cursor(cursor: str) -> CursorPosition:
         value, row_id = payload["values"]
         if not isinstance(row_id, int) or isinstance(row_id, bool):
             raise ValueError("id must be an integer")
+        # urls.id is a Postgres INTEGER: anything outside 1..2^31-1 is forged, and
+        # would make the database fail (a 500) instead of a clean 400
+        if not 1 <= row_id <= MAX_ROW_ID:
+            raise ValueError("id is out of range")
         created_at = datetime.fromisoformat(value)
         if created_at.tzinfo is None:
             raise ValueError("created_at must include a timezone")
+        # In UTC it must still be a date Python and Postgres can hold (e.g. not the
+        # year 10000 that "9999-12-31T23:59:59-23:59" becomes)
+        created_at.astimezone(UTC)
         return created_at, row_id
-    except (binascii.Error, UnicodeDecodeError, ValueError, TypeError, KeyError) as exc:
+    except (
+        binascii.Error,
+        UnicodeDecodeError,
+        ValueError,
+        TypeError,
+        KeyError,
+        OverflowError,
+    ) as exc:
         raise InvalidCursorError() from exc

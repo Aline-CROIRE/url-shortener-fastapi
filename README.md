@@ -230,9 +230,9 @@ python -m app.scripts.seed         # fill the database with sample data
 
 | Method | Endpoint | What it does | Who may call it |
 |---|---|---|---|
-| `POST` | `/api/v1/auth/register/` | Create an account (email + password) | Anyone |
-| `POST` | `/api/v1/auth/login/` | Log in (OAuth2 form), get an access + refresh token | Anyone |
-| `POST` | `/api/v1/auth/refresh/` | Swap a refresh token for a new token pair | Anyone with a refresh token |
+| `POST` | `/api/v1/auth/register/` | Create an account (email + password) | Anyone; at most 10 accounts per hour per client (`429`) |
+| `POST` | `/api/v1/auth/login/` | Log in (OAuth2 form), get an access + refresh token | Anyone; at most 5 tries per minute per IP (`429`) |
+| `POST` | `/api/v1/auth/refresh/` | Swap a refresh token for a new token pair (each refresh token works once) | Anyone with a refresh token |
 | `GET` | `/api/v1/auth/me/` | The user of the access token | Logged in |
 | `POST` | `/api/v1/urls/` | Create a short URL | Logged in. Free: at most 10 active URLs, no custom alias |
 | `GET` | `/api/v1/urls/` | List URLs (cursor pages, filters) | Logged in: only your own URLs (also for an Admin) |
@@ -326,10 +326,16 @@ curl -X POST http://localhost:8000/api/v1/auth/refresh/ \
 - The token only says **who** you are. Your tier and whether your account is active are read
   from the database on every request, so a promotion, a switch-off or a deletion counts at
   once, and a refresh token of a deleted or switched-off user gets nothing.
-- There is **no logout endpoint**: tokens are stateless, so the server does not store them.
-  A client logs out by forgetting its tokens; a stolen access token stops working after at
-  most 15 minutes. Every token has a unique `jti`, ready for a server-side blocklist
-  (Redis, planned for Module 8) if instant revocation is needed.
+- **Every refresh token works once (rotation), and a reused one revokes them all (reuse
+  detection).** The server stores each refresh token's id (`jti`, never the token itself) in
+  the `refresh_tokens` table. A refresh marks it used in one atomic `UPDATE ... WHERE used_at
+  IS NULL`, so two refreshes with the same token can never both succeed. If an already used
+  refresh token comes back, someone kept a copy: thief and user cannot be told apart, so
+  every refresh token of that account is deleted and both must log in again (logged as a
+  security event).
+- **Access tokens stay stateless**: one already handed out works until it expires (at most
+  15 minutes). There is no logout endpoint (a client logs out by forgetting its tokens); a
+  Redis blocklist of access-token `jti`s is planned for Module 8 if instant revocation is needed.
 - Passwords are stored only as **Argon2id** hashes. They are Unicode-normalised (NFKC) first,
   so an accented password typed on any keyboard is the same password; spaces and letter case
   are kept exactly. Only ASCII emails are accepted, so a look-alike letter (such as a
@@ -381,7 +387,8 @@ wrong email or password), `403` not allowed (`forbidden`: someone else's URL;
 `"details": {"limit": 10}`), `404` not found, `409` alias,
 email or username already taken, `410` link expired or deleted, `422` invalid input
 (also `redirect_loop`: an original URL pointing back to this shortener is refused, because
-the short link would redirect to itself), `503` with `Retry-After` when Postgres cancelled
+the short link would redirect to itself), `429` too many login attempts (with
+`Retry-After`), `503` with `Retry-After` when Postgres cancelled
 the request because of a conflicting one (deadlock): nothing was saved, so it is safe to
 send again.
 
@@ -410,6 +417,121 @@ send again.
   before the owner deletes it and write it to Redis just after. To stop that late write,
   invalidating writes a 30-second "invalidated" marker (tombstone) and filling the cache uses
   `SET ... NX` (only if the key is empty), so the deleted link is never served from Redis.
+
+## Security
+
+### How one request is checked
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor client as Client
+    participant limit as Rate limit<br/>(slowapi)
+    participant auth as Auth service
+    participant guard as get_current_user<br/>+ require_tier
+    participant svc as URL service
+    participant db as PostgreSQL
+
+    Note over client,db: Log in (at most 5 tries per minute per IP)
+    client->>limit: POST /api/v1/auth/login/ (form: email in "username", password)
+    alt 6th try in a minute
+        limit-->>client: 429 + Retry-After
+    else allowed
+        limit->>auth: check email + password
+        auth->>db: SELECT user (short read, then closed)
+        Note right of auth: Argon2id check, against a dummy hash<br/>when the email is unknown (same time)
+        alt wrong email, wrong password or switched off
+            auth-->>client: 401 invalid_credentials (same answer always), logged
+        else right
+            auth-->>client: 200 access token (15 min) + refresh token (7 days)
+        end
+    end
+
+    Note over client,db: Any protected request
+    client->>guard: Authorization: Bearer access token
+    alt missing, forged, expired or a refresh token
+        guard-->>client: 401 + WWW-Authenticate
+    else valid signature (HS256 only) and type "access"
+        guard->>db: load the user: tier and is_active, fresh every time
+        alt deleted or switched off
+            guard-->>client: 401 invalid_token
+        else tier too low (e.g. analytics for Free)
+            guard-->>client: 403 insufficient_tier, logged
+        else allowed so far
+            guard->>svc: user id + Admin flag
+            svc->>db: load the URL (and lock the owner row if a URL may become active)
+            alt no such URL
+                svc-->>client: 404
+            else someone else's (not Admin), or the Free limit
+                svc-->>client: 403 forbidden / free_tier_limit, logged
+            else
+                svc-->>client: 200 / 201 / 204
+            end
+        end
+    end
+```
+
+### What protects what (OWASP Top 10, 2025)
+
+| Risk | How this app handles it |
+|---|---|
+| A01 Broken Access Control | Ownership checked on every URL (`403`), Admin override, tier dependencies, `owner_id` only from the token, the list shows only your URLs |
+| A02 Security Misconfiguration | `JWT_SECRET_KEY` required (32+ characters), `DEBUG` never shows stack traces, `nosniff` and `X-Frame-Options: DENY` on every response, the database has no public port in production |
+| A03 Software Supply Chain Failures | Every package pinned in `requirements.txt`, CI runs lint, types and tests, GitGuardian scans every pull request for secrets |
+| A04 Cryptographic Failures | Argon2id password hashes with a salt, HS256 tokens with a long random key, token responses are `no-store` |
+| A05 Injection | SQL only through SQLAlchemy (bound parameters), only `http`/`https` links (`javascript:` and `data:` are `422`), line breaks never reach the `Location` header, client text is cleaned before it is logged |
+| A06 Insecure Design | The Free limit is locked (`SELECT ... FOR UPDATE`), one lock order (no deadlocks), tested with real concurrent requests |
+| A07 Authentication Failures | Login and register rate limits (sliding window, one bucket per IPv4 address or IPv6 /64), one answer for every failed login, dummy-hash timing (also for accounts without a password), short access tokens, refresh tokens that work once with reuse detection, the `type` claim, `alg: none` refused |
+| A08 Software or Data Integrity Failures | Every token is signature-checked with a fixed algorithm list; tier and active status come from the database, never from the token |
+| A09 Security Logging and Alerting Failures | `app.security` logs failed logins (masked email + IP), every `403` (code, path, user id, IP) and rate-limit hits; never a password, token or `Authorization` header |
+| A10 Mishandling of Exceptional Conditions | Unknown errors: a plain `500` with a request id (details only in the server log); deadlocks: `503` + `Retry-After`; every token or permission doubt fails closed (`401`/`403`) |
+
+### What is checked on input
+
+- `original_url`: `http` or `https` only, at most 2048 characters, no `user:password@` inside
+  (it would be shown to every visitor; `https://google.com@evil.example` is a phishing trick),
+  and never one of our own hosts (`BASE_URL`'s host plus `OWN_HOSTS`, compared lower-case and
+  without a trailing dot), because the link would redirect to itself.
+- `custom_alias`: 3-10 characters of `A-Z a-z 0-9 _ -`; reserved names (`api`, `docs`,
+  `redoc`, `openapi`, `openapi.json`, `admin`, `health`, `static`, in any letter case) are `422`;
+  a taken alias is `409`.
+- Unknown fields are refused (`422`) everywhere, so nobody can send `tier`, `owner_id`,
+  `click_count` or `short_code`.
+- Text that goes to the database may not contain a NUL character (PostgreSQL cannot store
+  it); tag names and titles may not contain control or invisible characters at all;
+  `description` is at most 2000 characters.
+- Request bodies over 64 KB are refused with `413` (the largest real one is under 10 KB).
+- A forged pagination cursor (an impossible id or date) is `400 invalid_cursor`.
+- Strange user ids inside a signed token (`007`, numbers too big for the database) are `401`.
+  Server clocks may differ by up to 30 seconds without fresh tokens being refused.
+- Password hashing runs in a small pool of 4 threads per worker: a flood of logins or
+  registrations waits its turn instead of using 64 MB per request at once. A taken email is
+  refused before any hashing.
+- Logs never contain raw client text: paths, emails and request ids are cleaned, so a
+  client cannot forge a log line or hide terminal escape codes in it.
+
+### Known limits (and what production needs)
+
+- **Rate limit counters live in memory**, per worker process: with N Gunicorn workers one
+  client gets up to N x 5 login tries a minute, and a restart resets them. They count per
+  client, not per account, so a botnet spread over many addresses is not slowed down.
+  Module 8 moves them to Redis and can add a per-account limit.
+- **Behind a reverse proxy**, every client has the proxy's IP (and one client could lock
+  everyone out of login) unless `FORWARDED_ALLOW_IPS` is set to the proxy's address: then
+  Gunicorn trusts `X-Forwarded-For` from that proxy only. The app itself never reads
+  `X-Forwarded-For`: anyone can fake it.
+- **Access tokens cannot be revoked early**: a stolen one works until it expires (at most 15
+  minutes). Refresh tokens can be revoked (see above).
+- **Registering with a taken email answers `409`** (the specification asks for it), which tells
+  that the email is registered. Register is limited to 10 accounts per hour per client, which
+  makes checking many emails slow.
+- **Tags are shared by everyone** (Module 6 design): a new URL gets the tag's first spelling
+  ("Marketing"), which shows that someone already used that tag name. Tag names are not secret.
+- **Switching a user off** stops their tokens at once, but their short links keep redirecting
+  (a product decision: links already shared keep working).
+- **HTTPS** must be provided by the server or proxy in front of the app.
+- **Module 9** (URL previews) will fetch original URLs from the server: it will need its own
+  protection against links to internal addresses (`127.0.0.1`, `[::1]`, private networks).
 
 ## Tests
 

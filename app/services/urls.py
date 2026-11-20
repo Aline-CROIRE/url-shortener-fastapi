@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.cache import NullRedirectCache, RedirectCache
+from app.core.config import normalize_host
 from app.core.exceptions import (
     AliasTakenError,
     ForbiddenError,
@@ -53,30 +54,32 @@ class URLService:
         users: UserRepository,
         tags: TagRepository,
         cache: RedirectCache | None = None,
-        base_url: str | None = None,
+        own_hosts: frozenset[str] = frozenset(),
     ) -> None:
         """Keep the session, repositories and cache (no cache -> a cache that stores nothing)."""
-        # base_url is this shortener's own address (the BASE_URL setting): original
-        # URLs on the same host are refused, because they would loop
+        # own_hosts: every host name of this shortener (BASE_URL's host + OWN_HOSTS,
+        # normalised). Original URLs on them are refused, because they would loop
         self._session = session
         self._urls = urls
         self._users = users
         self._tags = tags
         self._cache = cache or NullRedirectCache()
-        self._own_host = urlsplit(base_url).hostname if base_url else None
+        self._own_hosts = own_hosts
 
     def _refuse_own_links(self, original_url: str) -> None:
         """Refuse an original URL that points back to this shortener.
 
         Example: abc1234 -> http://our-host/abc1234 would redirect to itself forever
         (and count a click each time); two links pointing at each other loop too.
-        Only the host is compared (hostname is lower-cased), so another scheme or
-        port on our host is refused as well.
+        Only the host is compared, in normalised form (lower-case, no trailing dot),
+        so another scheme, port or spelling of our host is refused as well. Only
+        exact names match: "blog.sho.rt" or "sho.rt.example.org" are someone else's.
 
         Raises:
-            RedirectLoopError: If the original URL's host is our own host.
+            RedirectLoopError: If the original URL's host is one of our own hosts.
         """
-        if self._own_host is not None and urlsplit(original_url).hostname == self._own_host:
+        host = urlsplit(original_url).hostname
+        if host is not None and normalize_host(host) in self._own_hosts:
             raise RedirectLoopError(original_url)
 
     @staticmethod

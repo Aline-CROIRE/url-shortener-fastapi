@@ -35,6 +35,7 @@ def get_session_factory(request: Request) -> async_sessionmaker[AsyncSession]:
 
 
 async def get_current_user(
+    request: Request,
     token: Annotated[str | None, Security(oauth2_scheme)],
     settings: SettingsDep,
     session_factory: Annotated[async_sessionmaker[AsyncSession], Depends(get_session_factory)],
@@ -60,6 +61,7 @@ async def get_current_user(
         user = await session.get(User, user_id)
     if user is None or not user.is_active:
         raise InvalidTokenError()
+    request.state.user_id = user.id  # for the security log (who got a 403)
     return user
 
 

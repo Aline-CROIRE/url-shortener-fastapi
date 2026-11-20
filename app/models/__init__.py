@@ -5,8 +5,9 @@ Importing this package registers every model on Base.metadata, which Alembic
 """
 
 from app.models.click import Click
+from app.models.refresh_token import RefreshToken
 from app.models.tag import Tag, url_tags
 from app.models.url import URL
 from app.models.user import User, UserTier
 
-__all__ = ["URL", "Click", "Tag", "User", "UserTier", "url_tags"]
+__all__ = ["URL", "Click", "RefreshToken", "Tag", "User", "UserTier", "url_tags"]

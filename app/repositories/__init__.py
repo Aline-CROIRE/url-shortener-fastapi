@@ -5,8 +5,15 @@ Repositories add and flush, but never commit (one place commits: see F2.2).
 """
 
 from app.repositories.click import ClickRepository
+from app.repositories.refresh_token import RefreshTokenRepository
 from app.repositories.tag import TagRepository
 from app.repositories.url import URLRepository
 from app.repositories.user import UserRepository
 
-__all__ = ["ClickRepository", "TagRepository", "URLRepository", "UserRepository"]
+__all__ = [
+    "ClickRepository",
+    "RefreshTokenRepository",
+    "TagRepository",
+    "URLRepository",
+    "UserRepository",
+]

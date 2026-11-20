@@ -8,7 +8,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.cache import RedirectCache
 from app.core.config import Settings
 from app.db.database import get_db, get_read_db
-from app.repositories import ClickRepository, TagRepository, URLRepository, UserRepository
+from app.repositories import (
+    ClickRepository,
+    RefreshTokenRepository,
+    TagRepository,
+    URLRepository,
+    UserRepository,
+)
 from app.services.analytics import AnalyticsService
 from app.services.auth import AuthService
 from app.services.redirect import RedirectService
@@ -107,9 +113,14 @@ def get_url_service(
     settings: SettingsDep,
 ) -> URLService:
     """Build the URL service for create, update and delete (write side)."""
-    # WRITE side: create / update / delete. base_url lets it refuse links to itself.
+    # WRITE side: create / update / delete. own_hosts lets it refuse links to itself.
     return URLService(
-        session=db, urls=urls, users=users, tags=tags, cache=cache, base_url=settings.base_url
+        session=db,
+        urls=urls,
+        users=users,
+        tags=tags,
+        cache=cache,
+        own_hosts=settings.own_host_names,
     )
 
 
@@ -136,8 +147,10 @@ AnalyticsServiceDep = Annotated[AnalyticsService, Depends(get_analytics_service)
 
 
 def get_auth_service(db: DbSession, users: UserRepoDep, settings: SettingsDep) -> AuthService:
-    """Build the auth service (write side: register and login write to the database)."""
-    return AuthService(session=db, users=users, settings=settings)
+    """Build the auth service (write side: register, login and refresh write to the database)."""
+    return AuthService(
+        session=db, users=users, settings=settings, refresh_tokens=RefreshTokenRepository(db)
+    )
 
 
 AuthServiceDep = Annotated[AuthService, Depends(get_auth_service)]

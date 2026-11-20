@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from redis.asyncio import Redis
+from slowapi.errors import RateLimitExceeded
 
 from app.api.router import router
 from app.api.routes import health, redirect
@@ -13,7 +14,12 @@ from app.cache import NullRedirectCache, RedirectCache, RedisRedirectCache
 from app.core.config import Settings, get_settings
 from app.core.error_handlers import register_exception_handlers
 from app.core.logging import setup_logging
-from app.core.middleware import RequestLoggingMiddleware
+from app.core.middleware import (
+    BodySizeLimitMiddleware,
+    RequestLoggingMiddleware,
+    SecurityHeadersMiddleware,
+)
+from app.core.rate_limit import limiter, rate_limit_exceeded_handler
 from app.db.database import create_engine, create_read_engine, create_session_factory
 
 logger = logging.getLogger(__name__)
@@ -85,8 +91,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Application-level data: every request can read it via request.app.state
     app.state.settings = settings
 
+    # Added first = innermost: a 413 for a too-large body is still logged and gets
+    # the security headers from the two middlewares around it
+    app.add_middleware(BodySizeLimitMiddleware)
     app.add_middleware(RequestLoggingMiddleware)
+    app.add_middleware(SecurityHeadersMiddleware)  # added last = outermost: every response
     register_exception_handlers(app)
+    # The login rate limit (slowapi): its decorator finds the limiter on app.state
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
     app.include_router(health.router)
     app.include_router(router)

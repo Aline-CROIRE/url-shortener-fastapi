@@ -22,6 +22,7 @@ from sqlalchemy.pool import NullPool
 from alembic import command
 from app.api.auth import get_current_user, get_session_factory
 from app.core.config import Settings, get_settings
+from app.core.rate_limit import limiter
 from app.core.security import create_access_token
 from app.db.database import get_db, get_read_db
 from app.db.query_counter import QueryCounter, count_queries
@@ -254,6 +255,14 @@ def make_user(run_db: Callable[..., Any], test_settings: Settings) -> Callable[.
         return AuthedUser(id=user_id, email=email, headers={"Authorization": f"Bearer {token}"})
 
     return make
+
+
+@pytest.fixture(autouse=True)
+def reset_rate_limits() -> Iterator[None]:
+    """Start every test with empty login rate-limit counters (they live in memory)."""
+    limiter.reset()
+    yield
+    limiter.reset()
 
 
 @pytest.fixture
