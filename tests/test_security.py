@@ -107,14 +107,15 @@ def test_access_token_has_only_the_five_claims(test_settings: Settings) -> None:
 def test_access_token_lives_15_minutes(test_settings: Settings) -> None:
     claims = read_claims(create_access_token(USER_ID, test_settings))
 
-    assert claims["exp"] - claims["iat"] == 15 * 60
+    # iat is exact (with fractions); exp is in whole seconds, so it is up to 1 s shorter
+    assert 15 * 60 - 1 < claims["exp"] - claims["iat"] <= 15 * 60
 
 
 def test_refresh_token_lives_7_days(test_settings: Settings) -> None:
     claims = read_claims(create_refresh_token(USER_ID, test_settings))
 
     assert claims["type"] == "refresh"
-    assert claims["exp"] - claims["iat"] == 7 * 24 * 60 * 60
+    assert 7 * 24 * 60 * 60 - 1 < claims["exp"] - claims["iat"] <= 7 * 24 * 60 * 60
 
 
 def test_every_token_gets_its_own_jti(test_settings: Settings) -> None:

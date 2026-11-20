@@ -10,8 +10,8 @@ so EVERY refresh token of that user is revoked and both must log in again.
     refresh R1  -> reuse! all refresh tokens of the user revoked  401
     refresh R2  -> revoked                                         401
 
-Access tokens stay stateless: one already handed out works until it expires
-(15 minutes at most). Only the jti (the token's id) is stored, never the token.
+A reuse also sets users.tokens_valid_after, so the access tokens die at once too
+(see test_token_revocation.py). Only the jti (the token's id) is stored, never the token.
 """
 
 import asyncio
@@ -136,14 +136,14 @@ def test_after_a_revocation_logging_in_again_works(db_client: TestClient) -> Non
     assert refresh(db_client, again["refresh_token"]).status_code == 200
 
 
-def test_access_tokens_stay_valid_until_they_expire(db_client: TestClient) -> None:
+def test_a_reuse_also_kills_the_access_tokens_at_once(db_client: TestClient) -> None:
     first = register_and_login(db_client)
     refresh(db_client, first["refresh_token"])
-    refresh(db_client, first["refresh_token"])  # reuse: refresh tokens revoked
+    refresh(db_client, first["refresh_token"])  # reuse: everything revoked
 
-    # Stateless by design: at most 15 more minutes (documented in the README)
+    # Not "up to 15 more minutes": tokens_valid_after stops it now (test_token_revocation)
     me = db_client.get(f"{AUTH}/me/", headers={"Authorization": f"Bearer {first['access_token']}"})
-    assert me.status_code == 200
+    assert me.status_code == 401
 
 
 def test_a_signed_refresh_token_the_server_never_issued_is_refused(
