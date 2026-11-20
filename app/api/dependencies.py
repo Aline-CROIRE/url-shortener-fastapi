@@ -135,9 +135,9 @@ def get_analytics_service(urls: ReadURLRepoDep, clicks: ReadClickRepoDep) -> Ana
 AnalyticsServiceDep = Annotated[AnalyticsService, Depends(get_analytics_service)]
 
 
-def get_auth_service(db: DbSession, users: UserRepoDep) -> AuthService:
+def get_auth_service(db: DbSession, users: UserRepoDep, settings: SettingsDep) -> AuthService:
     """Build the auth service (write side: register and login write to the database)."""
-    return AuthService(session=db, users=users)
+    return AuthService(session=db, users=users, settings=settings)
 
 
 AuthServiceDep = Annotated[AuthService, Depends(get_auth_service)]

@@ -114,8 +114,7 @@ erDiagram
         string email UK "required"
         string username UK
         string hashed_password
-        boolean is_active "default true"
-        boolean is_premium "default false"
+        boolean is_active "default true, false = cannot log in"
         enum tier "free, premium or admin (the only admin switch)"
         timestamp last_login "nullable"
         timestamp created_at "date joined"
@@ -175,7 +174,9 @@ How to read it: `PK` = primary key, `FK` = foreign key (points to another table)
 - A URL is **live** when it is active, not deleted and not expired; only live URLs redirect.
 - Deleting a URL through the API is a **soft delete**: `deleted_at` is set, so its short code is
   never reused and its click history is kept.
-- `is_premium` always matches `tier` (premium and admin users are premium).
+- `is_premium` is **not a column**: it is a read-only property worked out from `tier`
+  (premium and admin are premium), so the two can never disagree. A migration removed the
+  old column; its downgrade rebuilds it from `tier`, so no data is lost either way.
 - Six default tags (Marketing, Social, Email, Ads, Events, Personal) are added by a migration.
 
 ## Setup
@@ -204,6 +205,8 @@ python -m venv .venv
 .venv\Scripts\activate             # macOS/Linux: source .venv/bin/activate
 pip install -r requirements-dev.txt
 cp .env.example .env
+# then set JWT_SECRET_KEY in .env to your own random value (32+ characters):
+python -c "import secrets; print(secrets.token_urlsafe(48))"
 
 docker compose up -d db redis      # PostgreSQL and Redis
 alembic upgrade head               # create the tables
@@ -211,6 +214,9 @@ uvicorn app.main:app --reload
 ```
 
 Settings are read from environment variables; see [.env.example](.env.example).
+`JWT_SECRET_KEY` has **no default**: the app refuses to start if it is missing or shorter
+than 32 characters, so a weak or public key can never sign tokens. `docker compose up` sets
+a development-only value; `docker-compose.prod.yml` refuses to start without your own.
 
 ### Database commands
 
@@ -224,10 +230,10 @@ python -m app.scripts.seed         # fill the database with sample data
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `POST` | `/api/v1/auth/register/` | Create an account |
-| `POST` | `/api/v1/auth/login/` | Log in (sets the session cookie) |
-| `POST` | `/api/v1/auth/logout/` | Log out |
-| `GET` | `/api/v1/auth/me/` | The logged-in user |
+| `POST` | `/api/v1/auth/register/` | Create an account (email + password) |
+| `POST` | `/api/v1/auth/login/` | Log in (OAuth2 form) and get an access + refresh token |
+| `POST` | `/api/v1/auth/refresh/` | Swap a refresh token for a new token pair |
+| `GET` | `/api/v1/auth/me/` | The user of the access token |
 | `POST` | `/api/v1/urls/` | Create a short URL |
 | `GET` | `/api/v1/urls/` | List your URLs |
 | `GET` | `/api/v1/urls/{short_code}/` | Get URL details (owner, tags, click count) |
@@ -239,32 +245,75 @@ python -m app.scripts.seed         # fill the database with sample data
 
 ### Log in
 
-The URL and analytics endpoints need a logged-in user. Each user only sees and changes
-their own URLs; anyone else's URL answers `404`. The redirect and `/health` stay public.
+The URL and analytics endpoints need an **access token** (JWT). Each user only sees and
+changes their own URLs. The redirect (`/{short_code}/`) and `/health` stay public.
 
 ```bash
-# 1. Create an account
+# 1. Create an account: only email and password (8-128 characters) are needed.
+#    The answer is {"id", "email", "tier"}; every account starts on the free tier.
 curl -X POST http://localhost:8000/api/v1/auth/register/ \
   -H "Content-Type: application/json" \
-  -d '{"email": "aline@example.com", "username": "aline", "password": "a-long-password"}'
+  -d '{"email": "aline@example.com", "password": "a-long-passphrase"}'
 
-# 2. Log in: the server answers with a signed session cookie (saved here in cookies.txt)
-curl -X POST http://localhost:8000/api/v1/auth/login/ -c cookies.txt \
-  -H "Content-Type: application/json" \
-  -d '{"email": "aline@example.com", "password": "a-long-password"}'
+# 2. Log in. It is the OAuth2 password flow, so it is a FORM, and the EMAIL goes in "username"
+curl -X POST http://localhost:8000/api/v1/auth/login/ \
+  -d "username=aline@example.com" -d "password=a-long-passphrase"
+# -> {"access_token": "eyJ...", "refresh_token": "eyJ...", "token_type": "bearer"}
 
-# 3. Send the cookie with every request
-curl http://localhost:8000/api/v1/urls/ -b cookies.txt
+# 3. Send the access token with every request
+TOKEN="eyJ..."   # the access_token from step 2
+curl http://localhost:8000/api/v1/urls/ -H "Authorization: Bearer $TOKEN"
+
+# 4. After 15 minutes the access token expires (401): get a new pair with the refresh token
+curl -X POST http://localhost:8000/api/v1/auth/refresh/ \
+  -H "Content-Type: application/json" -d '{"refresh_token": "eyJ..."}'
 ```
 
-In Swagger (`/docs`), call **login** once: the browser keeps the cookie and sends it with
-every request after that. Passwords are stored as Argon2 hashes. The cookie is signed with
-`SECRET_KEY`, is `HttpOnly` and `SameSite=Lax`, and expires after one day.
+**In Swagger (`/docs`):**
+
+1. Run **POST /api/v1/auth/register/** with your email and password.
+2. Click the **Authorize** button (top right, the lock icon).
+3. Type your **email in the `username` field** and your password; leave `client_id` and
+   `client_secret` empty. Click **Authorize**, then **Close**.
+4. Every request now sends `Authorization: Bearer <token>` (the lock icons are closed).
+   Try **GET /api/v1/auth/me/**.
+5. When a request answers `401` (after 15 minutes), click **Authorize** again: **Logout**,
+   then log in again.
+
+**How the tokens work:**
+
+| | Access token | Refresh token |
+|---|---|---|
+| Used for | every API request (`Authorization: Bearer ...`) | only `POST /auth/refresh/` |
+| Lives | 15 minutes (`ACCESS_TOKEN_MINUTES`) | 7 days (`REFRESH_TOKEN_DAYS`) |
+| Contains | only `sub` (user id), `type`, `iat`, `exp`, `jti`: no email, no tier | the same five claims |
+
+- Tokens are signed with **HS256** and `JWT_SECRET_KEY`. The server only accepts HS256
+  (an `alg: none` or any other algorithm is refused) and checks `type`: an access token is
+  refused at `/refresh/`, and a refresh token is refused everywhere else.
+- The token only says **who** you are. Your tier and whether your account is active are read
+  from the database on every request, so a promotion, a switch-off or a deletion counts at
+  once, and a refresh token of a deleted or switched-off user gets nothing.
+- There is **no logout endpoint**: tokens are stateless, so the server does not store them.
+  A client logs out by forgetting its tokens; a stolen access token stops working after at
+  most 15 minutes. Every token has a unique `jti`, ready for a server-side blocklist
+  (Redis, planned for Module 8) if instant revocation is needed.
+- Passwords are stored only as **Argon2id** hashes. They are Unicode-normalised (NFKC) first,
+  so an accented password typed on any keyboard is the same password; spaces and letter case
+  are kept exactly. Only ASCII emails are accepted, so a look-alike letter (such as a
+  Cyrillic "a") cannot create an account that looks like someone else's.
+- A wrong password, an unknown email and a switched-off account all get the **same** `401`,
+  and an unknown email still runs one password check, so neither the answer nor the response
+  time shows which emails are registered. (Registering with a taken email does answer `409`,
+  as the specification asks.)
+- Token responses send `Cache-Control: no-store`, so no browser or proxy keeps a copy.
+- `username` is optional when registering: it is made from the email (`aline` from
+  `aline@example.com`), with a random number added if that name is taken.
 
 ### Create a short URL
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/urls/ -b cookies.txt \
+curl -X POST http://localhost:8000/api/v1/urls/ -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"original_url": "https://www.python.org/", "custom_alias": "python", "tags": ["Marketing"]}'
 ```
@@ -274,7 +323,8 @@ curl -X POST http://localhost:8000/api/v1/urls/ -b cookies.txt \
 ### List your URLs
 
 ```bash
-curl "http://localhost:8000/api/v1/urls/?limit=20&sort=newest&tag=Marketing" -b cookies.txt
+curl "http://localhost:8000/api/v1/urls/?limit=20&sort=newest&tag=Marketing" \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 Optional filters: `tag`, `is_active`, `expired`, `search`. Sort: `newest` (has pages) or `most_clicked`
@@ -291,7 +341,9 @@ All errors use the same format:
 {"error": {"code": "url_not_found", "message": "Short URL 'abc1234' was not found.", "details": {"short_code": "abc1234"}}}
 ```
 
-Common status codes: `401` not logged in or wrong password, `404` not found, `409` alias,
+Common status codes: `401` with a `WWW-Authenticate: Bearer` header (`not_authenticated`:
+no token sent; `invalid_token`: bad, expired or wrong-type token; `invalid_credentials`:
+wrong email or password), `404` not found, `409` alias,
 email or username already taken, `410` link expired or deleted, `422` invalid input
 (also `redirect_loop`: an original URL pointing back to this shortener is refused, because
 the short link would redirect to itself), `503` with `Retry-After` when Postgres cancelled
@@ -305,7 +357,13 @@ send again.
 - **Two updates of one URL:** the update reads the URL with `SELECT ... FOR UPDATE`, so the
   second waits for the first and then starts from its result (no mixed tag lists). Lock order
   is always the URL row first, then tags; redirects only lock the URL row.
-- **A visit is not an edit:** counting a click keeps `updated_at` unchanged.
+- **A visit is not an edit:** counting a click keeps `updated_at` unchanged, and so does
+  recording a login (`last_login`).
+- **Two registrations with the same email:** the unique rule in Postgres decides, so the
+  second one gets `409`, never a `500`. If two people's made-up usernames clash (both
+  `aline`), the second simply gets `aline` plus a random number.
+- **Login does not hold the database:** the slow password check runs after the read
+  transaction is closed, so no pooled connection waits for it.
 - **Cache vs. a change (cache-aside race):** a visitor may read a link from the database just
   before the owner deletes it and write it to Redis just after. To stop that late write,
   invalidating writes a 30-second "invalidated" marker (tombstone) and filling the cache uses

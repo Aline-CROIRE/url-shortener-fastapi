@@ -4,8 +4,8 @@ from datetime import datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
-from sqlalchemy import CheckConstraint, DateTime, Enum, String, false, true
-from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
+from sqlalchemy import DateTime, Enum, String, true
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin
 
@@ -31,16 +31,10 @@ class User(TimestampMixin, Base):
 
     The tier decides what a user may do: free, premium or admin (one field, so
     there is no second "is admin" flag that could disagree with it).
+    is_premium is NOT a column: it is worked out from tier (one source of truth).
     """
 
     __tablename__ = "users"
-    __table_args__ = (
-        # is_premium can never contradict tier, not even through raw SQL
-        CheckConstraint(
-            "is_premium = (tier IN ('premium', 'admin'))",
-            name="is_premium_matches_tier",
-        ),
-    )
 
     email: Mapped[str] = mapped_column(String(255), unique=True)
     username: Mapped[str] = mapped_column(String(150), unique=True)
@@ -50,7 +44,6 @@ class User(TimestampMixin, Base):
     is_active: Mapped[bool] = mapped_column(default=True, server_default=true())
     last_login: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
-    is_premium: Mapped[bool] = mapped_column(default=False, server_default=false())
     tier: Mapped[UserTier] = mapped_column(
         Enum(
             UserTier,
@@ -72,11 +65,15 @@ class User(TimestampMixin, Base):
         passive_deletes=True,
     )
 
-    @validates("tier")
-    def _keep_is_premium_in_sync(self, key: str, tier: UserTier) -> UserTier:
-        """Set is_premium whenever the tier is set (premium and admin get premium features)."""
-        self.is_premium = UserTier(tier).has_premium_features
-        return tier
+    @property
+    def is_premium(self) -> bool:
+        """Return True for the tiers with premium features (premium and admin).
+
+        Read-only and computed from tier, so the two can never disagree.
+        Before the first save tier may still be None (the default is applied
+        on INSERT): that counts as free.
+        """
+        return self.tier is not None and UserTier(self.tier).has_premium_features
 
     def __repr__(self) -> str:
         """Return a short text form of the user for logs and debugging."""

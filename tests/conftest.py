@@ -1,7 +1,14 @@
+import os
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any
+
+# JWT_SECRET_KEY is required (the app refuses to start without it). Set a test-only
+# value BEFORE importing the app: importing app.main already builds the settings.
+# A value already set in the environment still wins.
+TEST_JWT_SECRET_KEY = "test-only-jwt-secret-key-at-least-32-chars"
+os.environ["JWT_SECRET_KEY"] = os.environ.get("JWT_SECRET_KEY", TEST_JWT_SECRET_KEY)
 
 import pytest
 from alembic.config import Config
@@ -108,7 +115,7 @@ def db_client(
     # Reads use the SAME test transaction, so they see the data the test wrote
     # (in production the read side may be a replica, a moment behind)
     app.dependency_overrides[get_read_db] = override_get_db
-    # The login check (who is this cookie?) opens its own short session: same test transaction
+    # The token check (whose token is this?) opens its own short session: same test transaction
     app.dependency_overrides[get_session_factory] = lambda: test_session
 
     with TestClient(app, follow_redirects=False, raise_server_exceptions=False) as test_client:
@@ -187,7 +194,7 @@ def owner_id(app: FastAPI, run_db: Callable[..., Any]) -> int:
     """Seed a user and make the app treat them as the current owner.
 
     A shortcut for tests that are not about login: no register/login request needed.
-    The real cookie login is tested in tests/test_auth.py.
+    The real token login is tested in tests/test_auth.py.
     """
 
     async def create_owner(session: AsyncSession) -> int:
