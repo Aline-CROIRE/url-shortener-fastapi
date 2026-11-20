@@ -11,6 +11,10 @@ from typing import Any
 # A value already set in the environment still wins.
 TEST_JWT_SECRET_KEY = "test-only-jwt-secret-key-at-least-32-chars"
 os.environ["JWT_SECRET_KEY"] = os.environ.get("JWT_SECRET_KEY", TEST_JWT_SECRET_KEY)
+# Rate-limit counters in MEMORY for the test suite, even if .env sets REDIS_URL: the
+# tests reset the counters all the time and must never touch a real Redis. The Redis
+# storage itself is tested on its own database in tests/test_rate_limit_storage.py.
+os.environ["RATE_LIMIT_STORAGE_URI"] = "memory://"
 
 import pytest
 from alembic.config import Config
