@@ -1,4 +1,4 @@
-"""Rate limits with slowapi, per client: LOGIN_RATE_LIMIT and REGISTER_RATE_LIMIT.
+"""Rate limits with slowapi: login and register per client, URL creation per user.
 
 Sliding ("moving") window: a fixed window would allow 5 tries at 0:59 and 5 more
 at 1:00, so 10 in one second; a sliding one counts the LAST minute at every moment.
@@ -48,6 +48,23 @@ def rate_limit_key(request: Request) -> str:
     return str(address)
 
 
+def user_rate_limit_key(request: Request) -> str:
+    """Return the bucket for a limit on LOGGED-IN actions: the user, whatever the network.
+
+    get_current_user stores the user id on the request before the endpoint runs,
+    so a spammer cannot get a fresh budget by switching networks, and colleagues
+    behind one office IP do not share a budget. Without a user (never the case on
+    the protected endpoints that use it) it falls back to the client address.
+    """
+    user_id = getattr(request.state, "user_id", None)
+    return f"user:{user_id}" if user_id is not None else rate_limit_key(request)
+
+
+def create_url_rate_limit() -> str:
+    """Return the configured limit on creating short URLs, per user."""
+    return get_settings().create_url_rate_limit
+
+
 def login_rate_limit() -> str:
     """Return the configured login limit (slowapi calls this when it checks)."""
     return get_settings().login_rate_limit
@@ -69,7 +86,7 @@ async def rate_limit_exceeded_handler(request: Request, exc: Exception) -> JSONR
         retry_after = exc.limit.limit.get_expiry()  # the window length, in seconds
     security_logger.warning(
         "Rate limit hit: client=%s path=%s",
-        clean_for_log(rate_limit_key(request)),
+        clean_for_log(user_rate_limit_key(request)),  # the user when known, else the address
         clean_for_log(request.url.path),
     )
     return error_response(
