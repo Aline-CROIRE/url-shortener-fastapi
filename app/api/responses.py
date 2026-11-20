@@ -61,9 +61,9 @@ FORBIDDEN: dict[int | str, dict[str, Any]] = {
 }
 TOO_MANY_REQUESTS: dict[int | str, dict[str, Any]] = {
     status.HTTP_429_TOO_MANY_REQUESTS: _error_doc(
-        "Too many login attempts (see the Retry-After header)",
+        "Too many attempts from this client (see the Retry-After header)",
         "too_many_requests",
-        "Too many login attempts from your address. Please try again in a minute.",
+        "Too many attempts from your address. Please try again later (see Retry-After).",
     ),
 }
 INVALID_CURSOR: dict[int | str, dict[str, Any]] = {

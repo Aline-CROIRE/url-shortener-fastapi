@@ -443,10 +443,14 @@ def test_a_huge_password_is_refused_without_hashing_it(
     calls: list[str] = []
     monkeypatch.setattr(auth_service_module, "verify_password", lambda p, h: calls.append(h))
 
-    response = login(db_client, password="x" * 100_000)
+    # Far longer than any valid password (128), but small enough to pass the body limit
+    response = login(db_client, password="x" * 10_000)
+    # So big that the body-size limit refuses it before any code even reads it
+    enormous = login(db_client, password="x" * 100_000)
 
     assert response.status_code == 401
     assert error_code(response) == "invalid_credentials"
+    assert enormous.status_code == 413
     assert calls == []  # never fed to the slow hash: no cheap way to load the server
 
 

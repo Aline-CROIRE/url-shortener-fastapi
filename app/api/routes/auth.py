@@ -18,7 +18,7 @@ from app.api.responses import (
 from app.core.client import client_ip
 from app.core.exceptions import InvalidCredentialsError
 from app.core.logging import mask_email
-from app.core.rate_limit import limiter, login_rate_limit
+from app.core.rate_limit import limiter, login_rate_limit, register_rate_limit
 from app.schemas.auth import RefreshIn, TokenPair, UserOut, UserRegister
 from app.schemas.user import UserRead
 
@@ -42,12 +42,19 @@ def no_store(response: Response) -> None:
     description=(
         "Only `email` and `password` (8-128 characters) are needed; `username` is "
         "optional and made from the email when missing. Every account starts on the "
-        "free tier. Only a hash of the password is stored."
+        "free tier. Only a hash of the password is stored. At most 10 new accounts "
+        "per hour per client (429 after that)."
     ),
-    responses={**CONFLICT, **VALIDATION_ERROR, **INTERNAL_ERROR},
+    responses={**CONFLICT, **TOO_MANY_REQUESTS, **VALIDATION_ERROR, **INTERNAL_ERROR},
 )
+# Each registration costs a slow (64 MB) password hash, and every account is a new
+# Free quota: without a limit, one client could load the server or create endless
+# accounts. Its own counter, separate from login.
+@limiter.shared_limit(register_rate_limit, scope="register")
 async def register(
-    payload: Annotated[UserRegister, Body(examples=[REGISTER_EXAMPLE])], service: AuthServiceDep
+    request: Request,  # slowapi reads the client from it
+    payload: Annotated[UserRegister, Body(examples=[REGISTER_EXAMPLE])],
+    service: AuthServiceDep,
 ) -> UserOut:
     """Create an account."""
     user = await service.register(payload)

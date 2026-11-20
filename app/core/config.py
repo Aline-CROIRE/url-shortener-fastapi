@@ -5,7 +5,7 @@ from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 
 from limits import parse as parse_rate_limit
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 # 32 random characters: far too many combinations to guess the key offline
@@ -69,8 +69,10 @@ class Settings(BaseSettings):
     # Token lifetimes (not secret, so they have defaults)
     access_token_minutes: int = Field(default=15, ge=1)
     refresh_token_days: int = Field(default=7, ge=1)
-    # Login attempts allowed per client IP address ("5/minute", "20/hour", ...)
+    # Login attempts allowed per client ("5/minute", "20/hour", ...)
     login_rate_limit: str = "5/minute"
+    # New accounts allowed per client: each costs a slow hash and could be spam
+    register_rate_limit: str = "10/hour"
 
     @field_validator("jwt_secret_key")
     @classmethod
@@ -96,9 +98,9 @@ class Settings(BaseSettings):
             return value  # pydantic reports the wrong type
         return [normalize_host(str(host)) for host in hosts if str(host).strip(" .")]
 
-    @field_validator("login_rate_limit")
+    @field_validator("login_rate_limit", "register_rate_limit")
     @classmethod
-    def check_login_rate_limit(cls, value: str) -> str:
+    def check_rate_limit(cls, value: str, info: ValidationInfo) -> str:
         """Refuse a rate limit that cannot be read, or one that allows no login at all.
 
         A typo must stop the app at startup, not switch the protection off silently.
@@ -111,9 +113,8 @@ class Settings(BaseSettings):
         except ValueError:
             limit = None
         if limit is None or limit.amount < 1:
-            raise ValueError(
-                f'LOGIN_RATE_LIMIT must look like "5/minute" (at least 1), not {value!r}'
-            )
+            name = (info.field_name or "rate_limit").upper()
+            raise ValueError(f'{name} must look like "5/minute" (at least 1), not {value!r}')
         return value
 
     @property
