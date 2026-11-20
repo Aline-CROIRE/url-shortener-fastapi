@@ -8,7 +8,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.cache import RedirectCache
 from app.core.config import Settings
 from app.db.database import get_db, get_read_db
-from app.repositories import ClickRepository, TagRepository, URLRepository, UserRepository
+from app.repositories import (
+    ClickRepository,
+    RefreshTokenRepository,
+    TagRepository,
+    URLRepository,
+    UserRepository,
+)
 from app.services.analytics import AnalyticsService
 from app.services.auth import AuthService
 from app.services.redirect import RedirectService
@@ -141,8 +147,10 @@ AnalyticsServiceDep = Annotated[AnalyticsService, Depends(get_analytics_service)
 
 
 def get_auth_service(db: DbSession, users: UserRepoDep, settings: SettingsDep) -> AuthService:
-    """Build the auth service (write side: register and login write to the database)."""
-    return AuthService(session=db, users=users, settings=settings)
+    """Build the auth service (write side: register, login and refresh write to the database)."""
+    return AuthService(
+        session=db, users=users, settings=settings, refresh_tokens=RefreshTokenRepository(db)
+    )
 
 
 AuthServiceDep = Annotated[AuthService, Depends(get_auth_service)]

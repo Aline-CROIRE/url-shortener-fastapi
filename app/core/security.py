@@ -2,6 +2,7 @@
 
 import secrets
 import unicodedata
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 
@@ -45,11 +46,14 @@ def verify_password(password: str, hashed_password: str) -> bool:
     """Return True if the password matches the stored hash.
 
     A wrong password returns False. A value that is not a known hash (like "!"
-    for accounts that cannot log in) also returns False instead of raising.
+    for accounts that cannot log in) also returns False instead of raising, AFTER
+    one check against DUMMY_HASH: otherwise such accounts would answer much faster
+    than real ones, and the response time would point them out.
     """
     try:
         return _password_hash.verify(_normalize(password), hashed_password)
     except UnknownHashError:
+        _password_hash.verify(_normalize(password), DUMMY_HASH)  # same slow work, result unused
         return False
 
 
@@ -60,6 +64,11 @@ def verify_password(password: str, hashed_password: str) -> bool:
 JWT_ALGORITHM = "HS256"
 # Every token must carry all of these, or it is rejected
 REQUIRED_CLAIMS = ["sub", "type", "iat", "exp", "jti"]
+# Server clocks can differ by a few seconds: tolerate that much on iat and exp,
+# or a token made by one server could be refused by another for a moment
+CLOCK_LEEWAY = timedelta(seconds=30)
+# users.id is a Postgres INTEGER: no real user id is larger
+MAX_USER_ID = 2**31 - 1
 
 
 class TokenType(StrEnum):
@@ -69,39 +78,81 @@ class TokenType(StrEnum):
     REFRESH = "refresh"  # only swapped for a new access token, long-lived
 
 
-def _create_token(user_id: int, token_type: TokenType, lifetime: timedelta, key: str) -> str:
+@dataclass(frozen=True)
+class IssuedToken:
+    """A signed token with the id (jti) and expiry the server may need to store."""
+
+    token: str
+    jti: str
+    expires_at: datetime
+
+
+@dataclass(frozen=True)
+class TokenClaims:
+    """What a checked token says: whose it is, and its id."""
+
+    user_id: int
+    jti: str
+
+
+def _create_token(
+    user_id: int, token_type: TokenType, lifetime: timedelta, key: str
+) -> IssuedToken:
     """Sign a token with only the five claims we need (no personal data)."""
     now = datetime.now(UTC)
+    jti = secrets.token_urlsafe(16)  # unique id: refresh tokens are stored by it
     payload = {
         "sub": str(user_id),  # the JWT standard wants the subject as a string
         "type": token_type.value,
         "iat": now,  # PyJWT turns datetimes into Unix timestamps
         "exp": now + lifetime,
-        "jti": secrets.token_urlsafe(16),  # unique id: lets a future blocklist revoke it
+        "jti": jti,
     }
-    return jwt.encode(payload, key, algorithm=JWT_ALGORITHM)
+    token = jwt.encode(payload, key, algorithm=JWT_ALGORITHM)
+    return IssuedToken(token=token, jti=jti, expires_at=now + lifetime)
 
 
 def create_access_token(user_id: int, settings: Settings) -> str:
     """Return a short-lived access token (ACCESS_TOKEN_MINUTES, 15 by default)."""
     lifetime = timedelta(minutes=settings.access_token_minutes)
     key = settings.jwt_secret_key.get_secret_value()
-    return _create_token(user_id, TokenType.ACCESS, lifetime, key)
+    return _create_token(user_id, TokenType.ACCESS, lifetime, key).token
 
 
-def create_refresh_token(user_id: int, settings: Settings) -> str:
-    """Return a long-lived refresh token (REFRESH_TOKEN_DAYS, 7 by default)."""
+def issue_refresh_token(user_id: int, settings: Settings) -> IssuedToken:
+    """Return a long-lived refresh token (REFRESH_TOKEN_DAYS) with its jti and expiry."""
     lifetime = timedelta(days=settings.refresh_token_days)
     key = settings.jwt_secret_key.get_secret_value()
     return _create_token(user_id, TokenType.REFRESH, lifetime, key)
 
 
-def decode_token(token: str, expected_type: TokenType, settings: Settings) -> int:
-    """Check a token and return the user id it was issued for.
+def create_refresh_token(user_id: int, settings: Settings) -> str:
+    """Return a long-lived refresh token (REFRESH_TOKEN_DAYS, 7 by default)."""
+    return issue_refresh_token(user_id, settings).token
+
+
+def _valid_user_id(subject: object) -> int | None:
+    """Return the user id in "sub", or None if it is not a plain, possible id.
+
+    Plain ASCII digits only ("١٢" or "-1" are refused), no leading zero ("007"),
+    and within the users.id column: a strange value must give 401, never a 500
+    from the database.
+    """
+    if not isinstance(subject, str) or not (subject.isascii() and subject.isdigit()):
+        return None
+    if len(subject) > len(str(MAX_USER_ID)) or subject.startswith("0"):
+        return None
+    user_id = int(subject)
+    return user_id if 1 <= user_id <= MAX_USER_ID else None
+
+
+def decode_token_claims(token: str, expected_type: TokenType, settings: Settings) -> TokenClaims:
+    """Check a token and return its user id and jti.
 
     Checks: the signature (HS256 only), not expired, every claim present, the
     expected type (an access token is refused where a refresh token is needed,
-    and the other way round) and a numeric user id.
+    and the other way round) and a valid user id. Clocks may differ by up to
+    CLOCK_LEEWAY.
 
     Raises:
         InvalidTokenError: For ANY failure. It always fails closed (401).
@@ -112,11 +163,22 @@ def decode_token(token: str, expected_type: TokenType, settings: Settings) -> in
             settings.jwt_secret_key.get_secret_value(),
             algorithms=[JWT_ALGORITHM],  # the server's list, not the token's "alg"
             options={"require": REQUIRED_CLAIMS},
+            leeway=CLOCK_LEEWAY,
         )
     except jwt.InvalidTokenError as exc:  # bad signature, expired, missing claim, garbage...
         raise InvalidTokenError() from exc
 
-    subject = payload["sub"]
-    if payload["type"] != expected_type.value or not (subject.isascii() and subject.isdigit()):
+    user_id = _valid_user_id(payload["sub"])
+    jti = payload["jti"]
+    if payload["type"] != expected_type.value or user_id is None or not isinstance(jti, str):
         raise InvalidTokenError()
-    return int(subject)
+    return TokenClaims(user_id=user_id, jti=jti)
+
+
+def decode_token(token: str, expected_type: TokenType, settings: Settings) -> int:
+    """Check a token (see decode_token_claims) and return the user id it was issued for.
+
+    Raises:
+        InvalidTokenError: For ANY failure. It always fails closed (401).
+    """
+    return decode_token_claims(token, expected_type, settings).user_id
