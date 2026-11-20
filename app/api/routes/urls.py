@@ -2,7 +2,7 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Body, Query, Response, status
+from fastapi import APIRouter, Body, Query, Request, Response, status
 from pydantic import AfterValidator
 
 from app.api.auth import CurrentUser
@@ -15,10 +15,12 @@ from app.api.responses import (
     INTERNAL_ERROR,
     INVALID_CURSOR,
     NOT_FOUND,
+    TOO_MANY_REQUESTS,
     UNAUTHORIZED,
     VALIDATION_ERROR,
 )
 from app.core.config import Settings
+from app.core.rate_limit import create_url_rate_limit, limiter, user_rate_limit_key
 from app.models import URL
 from app.models.tag import TAG_NAME_MAX_LENGTH
 from app.repositories.url import MAX_LIMIT, URLFilters, URLSort
@@ -64,10 +66,25 @@ def to_url_read(url: URL, settings: Settings) -> URLRead:
     "/",
     status_code=status.HTTP_201_CREATED,
     summary="Create a short URL",
-    description="URL and tags are saved in one transaction. A custom alias becomes the short code.",
-    responses={**UNAUTHORIZED, **FORBIDDEN, **CONFLICT, **VALIDATION_ERROR, **INTERNAL_ERROR},
+    description=(
+        "URL and tags are saved in one transaction. A custom alias becomes the short code. "
+        "At most 30 new URLs per minute per user (429 after that)."
+    ),
+    responses={
+        **UNAUTHORIZED,
+        **FORBIDDEN,
+        **CONFLICT,
+        **TOO_MANY_REQUESTS,
+        **VALIDATION_ERROR,
+        **INTERNAL_ERROR,
+    },
 )
+# Per USER (the token's), not per IP: stops mass creation of spam or phishing links,
+# also by a create/delete loop. Runs after get_current_user, so anonymous calls get
+# 401 and are never counted.
+@limiter.shared_limit(create_url_rate_limit, scope="create_url", key_func=user_rate_limit_key)
 async def create_url(
+    request: Request,  # slowapi reads the user id stored on it
     payload: Annotated[URLCreate, Body(openapi_examples=CREATE_EXAMPLES)],
     service: URLServiceDep,
     user: CurrentUser,

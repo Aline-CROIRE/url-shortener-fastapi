@@ -73,6 +73,8 @@ class Settings(BaseSettings):
     login_rate_limit: str = "5/minute"
     # New accounts allowed per client: each costs a slow hash and could be spam
     register_rate_limit: str = "10/hour"
+    # Short URLs one USER may create: stops mass creation of spam or phishing links
+    create_url_rate_limit: str = "30/minute"
 
     @field_validator("jwt_secret_key")
     @classmethod
@@ -98,7 +100,7 @@ class Settings(BaseSettings):
             return value  # pydantic reports the wrong type
         return [normalize_host(str(host)) for host in hosts if str(host).strip(" .")]
 
-    @field_validator("login_rate_limit", "register_rate_limit")
+    @field_validator("login_rate_limit", "register_rate_limit", "create_url_rate_limit")
     @classmethod
     def check_rate_limit(cls, value: str, info: ValidationInfo) -> str:
         """Refuse a rate limit that cannot be read, or one that allows no login at all.

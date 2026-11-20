@@ -234,7 +234,7 @@ python -m app.scripts.seed         # fill the database with sample data
 | `POST` | `/api/v1/auth/login/` | Log in (OAuth2 form), get an access + refresh token | Anyone; at most 5 tries per minute per IP (`429`) |
 | `POST` | `/api/v1/auth/refresh/` | Swap a refresh token for a new token pair (each refresh token works once) | Anyone with a refresh token |
 | `GET` | `/api/v1/auth/me/` | The user of the access token | Logged in |
-| `POST` | `/api/v1/urls/` | Create a short URL | Logged in. Free: at most 10 active URLs, no custom alias |
+| `POST` | `/api/v1/urls/` | Create a short URL | Logged in; at most 30 per minute per user (`429`). Free: at most 10 active URLs, no custom alias |
 | `GET` | `/api/v1/urls/` | List URLs (cursor pages, filters) | Logged in: only your own URLs (also for an Admin) |
 | `GET` | `/api/v1/urls/{short_code}/` | URL details (owner, tags, click count) | The owner or an Admin |
 | `PUT` | `/api/v1/urls/{short_code}/` | Update a URL | The owner or an Admin |
@@ -477,7 +477,7 @@ sequenceDiagram
 |---|---|
 | A01 Broken Access Control | Ownership checked on every URL (`403`), Admin override, tier dependencies, `owner_id` only from the token, the list shows only your URLs |
 | A02 Security Misconfiguration | `JWT_SECRET_KEY` required (32+ characters), `DEBUG` never shows stack traces, `nosniff` and `X-Frame-Options: DENY` on every response, the database has no public port in production |
-| A03 Software Supply Chain Failures | Every package pinned in `requirements.txt`, CI runs lint, types and tests, GitGuardian scans every pull request for secrets |
+| A03 Software Supply Chain Failures | Every package pinned in `requirements.txt`; CI runs `pip-audit` on every push, pull request and every Monday (fails on any known vulnerability); Dependabot opens weekly update PRs for packages, GitHub Actions and the Docker image; GitGuardian scans every pull request for secrets |
 | A04 Cryptographic Failures | Argon2id password hashes with a salt, HS256 tokens with a long random key, token responses are `no-store` |
 | A05 Injection | SQL only through SQLAlchemy (bound parameters), only `http`/`https` links (`javascript:` and `data:` are `422`), line breaks never reach the `Location` header, client text is cleaned before it is logged |
 | A06 Insecure Design | The Free limit is locked (`SELECT ... FOR UPDATE`), one lock order (no deadlocks), tested with real concurrent requests |
@@ -485,6 +485,27 @@ sequenceDiagram
 | A08 Software or Data Integrity Failures | Every token is signature-checked with a fixed algorithm list; tier and active status come from the database, never from the token |
 | A09 Security Logging and Alerting Failures | `app.security` logs failed logins (masked email + IP), every `403` (code, path, user id, IP) and rate-limit hits; never a password, token or `Authorization` header |
 | A10 Mishandling of Exceptional Conditions | Unknown errors: a plain `500` with a request id (details only in the server log); deadlocks: `503` + `Retry-After`; every token or permission doubt fails closed (`401`/`403`) |
+
+The web Top 10 has editions for 2017, 2021 and 2025 (the next is expected around
+2028). The 2021 list has the same risks under older names; its A10 Server-Side Request
+Forgery is part of A01 in 2025 and is covered below (API7).
+
+### What protects what (OWASP API Security Top 10, 2023)
+
+For an API this list fits even better than the web Top 10.
+
+| Risk | How this app handles it |
+|---|---|
+| API1 Broken Object Level Authorization | Every URL and analytics request checks the owner (`403`), Admin excepted; tested for read, update, switch-on and delete |
+| API2 Broken Authentication | See A07 above |
+| API3 Broken Object Property Level Authorization | `extra="forbid"` on every input (no `tier`, `owner_id`, `click_count`, `short_code`); responses never contain the password hash, and a URL shows only its owner's id and username |
+| API4 Unrestricted Resource Consumption | Rate limits on login (per client), register (per client) and creating URLs (per user); 64 KB body limit; page size at most 100; password hashing in a pool of 4 threads |
+| API5 Broken Function Level Authorization | Tier checks as dependencies (`require_tier`, `require_premium`): analytics and custom aliases need Premium or Admin |
+| API6 Unrestricted Access to Sensitive Business Flows | Mass link creation (spam, phishing) is limited to 30 new URLs per minute per user, whatever the network, and deleting does not give the budget back |
+| API7 Server-Side Request Forgery | The server never fetches the original URLs (the visitor's browser follows the redirect). Module 9 previews will need a check for internal addresses |
+| API8 Security Misconfiguration | See A02 above |
+| API9 Improper Inventory Management | One versioned API (`/api/v1`), every endpoint in Swagger and in the table above |
+| API10 Unsafe Consumption of APIs | The app calls no outside APIs today (Module 9 will) |
 
 ### What is checked on input
 
@@ -530,6 +551,10 @@ sequenceDiagram
 - **Switching a user off** stops their tokens at once, but their short links keep redirecting
   (a product decision: links already shared keep working).
 - **HTTPS** must be provided by the server or proxy in front of the app.
+- **Package hashes are not pinned**: versions are exact, but the downloaded files are not
+  checked against a hash. `pip-compile --generate-hashes` would add that (a next step for
+  the supply chain). Dependabot only starts once this code is on `main`, and its security
+  updates need "Dependabot security updates" switched on in the GitHub repository settings.
 - **Module 9** (URL previews) will fetch original URLs from the server: it will need its own
   protection against links to internal addresses (`127.0.0.1`, `[::1]`, private networks).
 
