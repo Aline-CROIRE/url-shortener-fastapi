@@ -333,9 +333,13 @@ curl -X POST http://localhost:8000/api/v1/auth/refresh/ \
   refresh token comes back, someone kept a copy: thief and user cannot be told apart, so
   every refresh token of that account is deleted and both must log in again (logged as a
   security event).
-- **Access tokens stay stateless**: one already handed out works until it expires (at most
-  15 minutes). There is no logout endpoint (a client logs out by forgetting its tokens); a
-  Redis blocklist of access-token `jti`s is planned for Module 8 if instant revocation is needed.
+- **Every token of an account can be revoked at once.** `users.tokens_valid_after` is a
+  moment in time: every access or refresh token issued before it is refused. A refresh-token
+  reuse sets it to "now", so a thief's access token stops working immediately, not 15
+  minutes later. Token `iat` times are exact (fractions of a second, as RFC 7519 allows) and
+  come from the app's clock, so a token issued a moment before is refused and a login a
+  moment after works. It is checked on the user row every request loads anyway: no extra
+  query. There is no logout endpoint (a client logs out by forgetting its tokens).
 - Passwords are stored only as **Argon2id** hashes. They are Unicode-normalised (NFKC) first,
   so an accented password typed on any keyboard is the same password; spaces and letter case
   are kept exactly. Only ASCII emails are accepted, so a look-alike letter (such as a
@@ -481,7 +485,7 @@ sequenceDiagram
 | A04 Cryptographic Failures | Argon2id password hashes with a salt, HS256 tokens with a long random key, token responses are `no-store` |
 | A05 Injection | SQL only through SQLAlchemy (bound parameters), only `http`/`https` links (`javascript:` and `data:` are `422`), line breaks never reach the `Location` header, client text is cleaned before it is logged |
 | A06 Insecure Design | The Free limit is locked (`SELECT ... FOR UPDATE`), one lock order (no deadlocks), tested with real concurrent requests |
-| A07 Authentication Failures | Login and register rate limits (sliding window, one bucket per IPv4 address or IPv6 /64), one answer for every failed login, dummy-hash timing (also for accounts without a password), short access tokens, refresh tokens that work once with reuse detection, the `type` claim, `alg: none` refused |
+| A07 Authentication Failures | Login and register rate limits (sliding window, one bucket per IPv4 address or IPv6 /64), a per-account limit on failed logins (stops botnets), counters in Redis shared by all workers, one answer for every failed login, dummy-hash timing (also for accounts without a password), short access tokens, refresh tokens that work once with reuse detection, every token revocable at once (`tokens_valid_after`), the `type` claim, `alg: none` refused |
 | A08 Software or Data Integrity Failures | Every token is signature-checked with a fixed algorithm list; tier and active status come from the database, never from the token |
 | A09 Security Logging and Alerting Failures | `app.security` logs failed logins (masked email + IP), every `403` (code, path, user id, IP) and rate-limit hits; never a password, token or `Authorization` header |
 | A10 Mishandling of Exceptional Conditions | Unknown errors: a plain `500` with a request id (details only in the server log); deadlocks: `503` + `Retry-After`; every token or permission doubt fails closed (`401`/`403`) |
@@ -499,7 +503,7 @@ For an API this list fits even better than the web Top 10.
 | API1 Broken Object Level Authorization | Every URL and analytics request checks the owner (`403`), Admin excepted; tested for read, update, switch-on and delete |
 | API2 Broken Authentication | See A07 above |
 | API3 Broken Object Property Level Authorization | `extra="forbid"` on every input (no `tier`, `owner_id`, `click_count`, `short_code`); responses never contain the password hash, and a URL shows only its owner's id and username |
-| API4 Unrestricted Resource Consumption | Rate limits on login (per client), register (per client) and creating URLs (per user); 64 KB body limit; page size at most 100; password hashing in a pool of 4 threads |
+| API4 Unrestricted Resource Consumption | Rate limits on login (per client and per account), register (per client) and creating URLs (per user), counted in Redis so every worker shares them; 64 KB body limit; page size at most 100; password hashing in a pool of 4 threads |
 | API5 Broken Function Level Authorization | Tier checks as dependencies (`require_tier`, `require_premium`): analytics and custom aliases need Premium or Admin |
 | API6 Unrestricted Access to Sensitive Business Flows | Mass link creation (spam, phishing) is limited to 30 new URLs per minute per user, whatever the network, and deleting does not give the budget back |
 | API7 Server-Side Request Forgery | The server never fetches the original URLs (the visitor's browser follows the redirect). Module 9 previews will need a check for internal addresses |
@@ -533,16 +537,26 @@ For an API this list fits even better than the web Top 10.
 
 ### Known limits (and what production needs)
 
-- **Rate limit counters live in memory**, per worker process: with N Gunicorn workers one
-  client gets up to N x 5 login tries a minute, and a restart resets them. They count per
-  client, not per account, so a botnet spread over many addresses is not slowed down.
-  Module 8 moves them to Redis and can add a per-account limit.
+- **Rate-limit counters live in Redis** whenever Redis is configured (`REDIS_URL`, or
+  `RATE_LIMIT_STORAGE_URI`): one count shared by every Gunicorn worker and kept across
+  restarts. This goes beyond the brief, which asked for in-memory storage with Redis in
+  Module 8. If Redis stops answering, the limits keep counting in each worker's memory
+  (so briefly "5" can mean "5 per worker") and switch back once Redis answers; a dead Redis
+  never causes a 500 (0.5 s connect and read timeouts). Measured on the production image
+  with 2 workers: Redis up, the 429 comes at exactly the 6th login every time; Redis
+  stopped, no errors and the limits still apply. One cost remains: slowapi talks to Redis
+  synchronously, and when the Redis host name cannot be resolved (a stopped container),
+  the first request on each worker waits about 3 s for the DNS lookup while the others
+  answer in milliseconds. An async limiter (the `limits` library's `async+redis://`
+  storage) would remove that; a Module 8 improvement.
+- **Failed logins are also limited per account** (`LOGIN_ACCOUNT_RATE_LIMIT`, 10 per hour,
+  from any address), which stops a botnet. Trade-off: anyone who knows an email can use up
+  its budget, so the owner may have to wait up to an hour; logins are slowed, the account is
+  never locked for good. The counters hold a keyed hash (HMAC) of the email, never the email.
 - **Behind a reverse proxy**, every client has the proxy's IP (and one client could lock
   everyone out of login) unless `FORWARDED_ALLOW_IPS` is set to the proxy's address: then
   Gunicorn trusts `X-Forwarded-For` from that proxy only. The app itself never reads
   `X-Forwarded-For`: anyone can fake it.
-- **Access tokens cannot be revoked early**: a stolen one works until it expires (at most 15
-  minutes). Refresh tokens can be revoked (see above).
 - **Registering with a taken email answers `409`** (the specification asks for it), which tells
   that the email is registered. Register is limited to 10 accounts per hour per client, which
   makes checking many emails slow.

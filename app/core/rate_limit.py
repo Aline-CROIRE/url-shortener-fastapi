@@ -3,14 +3,16 @@
 Sliding ("moving") window: a fixed window would allow 5 tries at 0:59 and 5 more
 at 1:00, so 10 in one second; a sliding one counts the LAST minute at every moment.
 
-Storage is IN MEMORY: every worker process keeps its own counters, so with N
-Gunicorn workers one client can try up to N x 5 times a minute, and a restart
-resets them. Module 8 moves the counters to Redis (storage_uri="redis://..."),
-shared by all workers and kept across restarts.
+Storage: REDIS when configured (RATE_LIMIT_STORAGE_URI, or REDIS_URL): one count
+shared by every Gunicorn worker and kept across restarts. Without Redis, each worker
+counts in its own memory (with N workers, "5 per minute" is really N x 5).
+If Redis stops answering, the limits keep counting in memory (per worker) and go
+back to Redis once it answers again: never a 500, never a hang (short timeouts).
 """
 
 import ipaddress
 import logging
+from typing import Any, cast
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
@@ -75,8 +77,36 @@ def register_rate_limit() -> str:
     return get_settings().register_rate_limit
 
 
-# Module 8: storage_uri="redis://..." so all workers share one count
-limiter = Limiter(key_func=rate_limit_key, storage_uri="memory://", strategy="moving-window")
+# A dead Redis must fail fast, not hang every login (same values as the redirect cache)
+REDIS_TIMEOUT_SECONDS = 0.5
+# Our keys in a shared Redis start with this (the redirect cache uses "redirect:")
+KEY_PREFIX = "url-shortener-limits"
+
+
+def build_limiter(storage_uri: str, key_prefix: str = KEY_PREFIX) -> Limiter:
+    """Create the rate limiter on the given storage ("memory://" or "redis://...").
+
+    in_memory_fallback_enabled: if the storage stops answering, slowapi counts in
+    memory instead and checks the storage again later (with growing pauses).
+    """
+    options: dict[str, Any] = {}
+    if storage_uri.startswith(("redis://", "rediss://")):
+        options = {
+            "socket_connect_timeout": REDIS_TIMEOUT_SECONDS,
+            "socket_timeout": REDIS_TIMEOUT_SECONDS,
+        }
+    return Limiter(
+        key_func=rate_limit_key,
+        storage_uri=storage_uri,
+        # slowapi types the options as text, but the Redis client needs numbers here
+        storage_options=cast(dict[str, str], options),
+        strategy="moving-window",
+        in_memory_fallback_enabled=True,
+        key_prefix=key_prefix,
+    )
+
+
+limiter = build_limiter(get_settings().rate_limit_storage)
 
 
 async def rate_limit_exceeded_handler(request: Request, exc: Exception) -> JSONResponse:

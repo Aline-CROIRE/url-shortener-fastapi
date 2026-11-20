@@ -10,6 +10,8 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 # 32 random characters: far too many combinations to guess the key offline
 MIN_SECRET_KEY_LENGTH = 32
+# Storages the rate limits can use (rediss = Redis over TLS)
+RATE_LIMIT_STORAGE_SCHEMES = ("memory://", "redis://", "rediss://")
 
 
 def normalize_host(host: str) -> str:
@@ -77,6 +79,10 @@ class Settings(BaseSettings):
     create_url_rate_limit: str = "30/minute"
     # FAILED logins allowed per account (email), from any address: stops a botnet
     login_account_rate_limit: str = "10/hour"
+    # Where the rate-limit counters live. Empty = REDIS_URL when set (shared by every
+    # worker, kept across restarts), else memory:// (per worker). "redis://..." or
+    # "rediss://..." (TLS) or "memory://".
+    rate_limit_storage_uri: str = ""
 
     @field_validator("jwt_secret_key")
     @classmethod
@@ -125,6 +131,26 @@ class Settings(BaseSettings):
             name = (info.field_name or "rate_limit").upper()
             raise ValueError(f'{name} must look like "5/minute" (at least 1), not {value!r}')
         return value
+
+    @field_validator("rate_limit_storage_uri")
+    @classmethod
+    def check_rate_limit_storage(cls, value: str) -> str:
+        """Refuse a storage the rate limits cannot use (a typo must stop the app).
+
+        Raises:
+            ValueError: If it is not empty, memory://, redis://... or rediss://...
+        """
+        if value and not value.startswith(RATE_LIMIT_STORAGE_SCHEMES):
+            raise ValueError(
+                "RATE_LIMIT_STORAGE_URI must be empty, memory://, redis://... or "
+                f"rediss://..., not {value!r}"
+            )
+        return value
+
+    @property
+    def rate_limit_storage(self) -> str:
+        """Return where the rate-limit counters live (see rate_limit_storage_uri)."""
+        return self.rate_limit_storage_uri or self.redis_url or "memory://"
 
     @property
     def own_host_names(self) -> frozenset[str]:
