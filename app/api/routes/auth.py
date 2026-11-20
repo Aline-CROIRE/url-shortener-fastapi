@@ -1,17 +1,29 @@
 """Endpoints to register, log in, refresh tokens and see who is logged in."""
 
+import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Body, Depends, Response, status
+from fastapi import APIRouter, Body, Depends, Request, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
 
 from app.api.auth import CurrentUser
 from app.api.dependencies import AuthServiceDep
-from app.api.responses import CONFLICT, INTERNAL_ERROR, UNAUTHORIZED, VALIDATION_ERROR
+from app.api.responses import (
+    CONFLICT,
+    INTERNAL_ERROR,
+    TOO_MANY_REQUESTS,
+    UNAUTHORIZED,
+    VALIDATION_ERROR,
+)
+from app.core.client import client_ip
+from app.core.exceptions import InvalidCredentialsError
+from app.core.logging import mask_email
+from app.core.rate_limit import limiter, login_rate_limit
 from app.schemas.auth import RefreshIn, TokenPair, UserOut, UserRegister
 from app.schemas.user import UserRead
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
+security_logger = logging.getLogger("app.security")
 
 REGISTER_EXAMPLE = {"email": "aline@example.com", "password": "a-long-passphrase"}
 
@@ -49,17 +61,30 @@ async def register(
     description=(
         "OAuth2 password flow: send a FORM with your **email in `username`** and your "
         "`password`. Returns a short-lived access token (send it as "
-        "`Authorization: Bearer <token>`) and a long-lived refresh token."
+        "`Authorization: Bearer <token>`) and a long-lived refresh token. "
+        "At most 5 attempts per minute per IP address (429 after that)."
     ),
-    responses={**UNAUTHORIZED, **VALIDATION_ERROR, **INTERNAL_ERROR},
+    responses={**UNAUTHORIZED, **TOO_MANY_REQUESTS, **VALIDATION_ERROR, **INTERNAL_ERROR},
 )
+# Counts EVERY attempt from one IP (right or wrong password, any email). shared_limit
+# with one scope: "/login/" and "/login" use ONE counter (a plain limit() counts each
+# path apart, which would give 5 + 5 tries).
+@limiter.shared_limit(login_rate_limit, scope="login")
 async def login(
+    request: Request,  # slowapi reads the client IP from it
     form: Annotated[OAuth2PasswordRequestForm, Depends()],
     service: AuthServiceDep,
     response: Response,
 ) -> TokenPair:
     """Log in and get a token pair."""
-    tokens = await service.login(form.username, form.password)
+    try:
+        tokens = await service.login(form.username, form.password)
+    except InvalidCredentialsError:
+        # Who tried and from where; NEVER the password, and only a masked email
+        security_logger.warning(
+            "Failed login for %s from ip=%s", mask_email(form.username), client_ip(request)
+        )
+        raise
     no_store(response)
     return tokens
 

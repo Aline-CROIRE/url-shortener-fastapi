@@ -69,6 +69,9 @@ markers = [
 filterwarnings = [
     # Starlette suggests the newer "httpx2" package for TestClient; httpx still works
     "ignore:Using `httpx` with `starlette.testclient` is deprecated",
+    # Inside slowapi 0.1.10 (not our code): Python 3.14 deprecates the function it
+    # calls, which is removed only in 3.16. Ignored for slowapi alone.
+    "ignore:'asyncio.iscoroutinefunction' is deprecated:DeprecationWarning:slowapi",
 ]
 
 # ---------------------------------------------------------------- coverage (pytest --cov)

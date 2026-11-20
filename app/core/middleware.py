@@ -1,11 +1,13 @@
-"""Middleware that logs every request and adds a request ID to the response."""
+"""Middleware: request logging with a request ID, and security headers on every response."""
 
 import logging
 import time
 import uuid
 
 from fastapi import Request, Response
+from starlette.datastructures import MutableHeaders
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 logger = logging.getLogger("app.requests")
 
@@ -47,3 +49,32 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             duration_ms,
             request_id,
         )
+
+
+# Sent with every response. nosniff: browsers must trust our Content-Type and never
+# "guess" that a JSON body is HTML or a script. DENY: no other site may show our
+# pages inside a frame (clickjacking).
+SECURITY_HEADERS = {"X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY"}
+
+
+class SecurityHeadersMiddleware:
+    """Add SECURITY_HEADERS to every HTTP response (a plain ASGI middleware: no extra copy)."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        """Wrap the next ASGI app."""
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Pass the request on, and add the headers when the response starts."""
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_headers(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                for name, value in SECURITY_HEADERS.items():
+                    headers.setdefault(name, value)
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
