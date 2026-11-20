@@ -1,5 +1,7 @@
 """Database access for users."""
 
+from datetime import datetime
+
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -49,6 +51,20 @@ class UserRepository:
         self._session.add(user)
         await self._session.flush()  # sends the INSERT now: user.id is filled in
         return user
+
+    async def revoke_tokens(self, user_id: int, moment: datetime) -> None:
+        """Refuse every token of the user issued before `moment` (tokens_valid_after).
+
+        `moment` comes from the APP's clock, the same clock that writes the tokens'
+        "iat", never from the database's now(): two different clocks could disagree.
+        updated_at keeps its value: a security event is not an edit of the account.
+        """
+        await self._session.execute(
+            update(User)
+            .where(User.id == user_id)
+            .values(tokens_valid_after=moment, updated_at=User.updated_at)
+            .execution_options(synchronize_session=False)
+        )
 
     async def record_login(self, user_id: int) -> None:
         """Set last_login to now, in one UPDATE.

@@ -43,6 +43,10 @@ class User(TimestampMixin, Base):
     # False = the account is switched off and cannot log in
     is_active: Mapped[bool] = mapped_column(default=True, server_default=true())
     last_login: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Every token (access and refresh) issued BEFORE this moment is refused: setting it
+    # to "now" logs the user out everywhere at once. NULL = nothing revoked.
+    # Exact time from the app's clock, compared with the token's exact "iat".
+    tokens_valid_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     tier: Mapped[UserTier] = mapped_column(
         Enum(

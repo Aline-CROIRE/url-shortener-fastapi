@@ -89,10 +89,21 @@ class IssuedToken:
 
 @dataclass(frozen=True)
 class TokenClaims:
-    """What a checked token says: whose it is, and its id."""
+    """What a checked token says: whose it is, its id, and when it was issued."""
 
     user_id: int
     jti: str
+    issued_at: datetime
+
+
+def is_revoked(issued_at: datetime, tokens_valid_after: datetime | None) -> bool:
+    """Return True if the token was issued before the user's tokens were revoked.
+
+    Both times are exact (fractions of a second) and come from the app's clock, so
+    a token issued a moment before the revocation is refused, and a new login a
+    moment after it works, even within the same second.
+    """
+    return tokens_valid_after is not None and issued_at < tokens_valid_after
 
 
 def _create_token(
@@ -104,8 +115,10 @@ def _create_token(
     payload = {
         "sub": str(user_id),  # the JWT standard wants the subject as a string
         "type": token_type.value,
-        "iat": now,  # PyJWT turns datetimes into Unix timestamps
-        "exp": now + lifetime,
+        # The EXACT issue time, with fractions of a second (allowed by RFC 7519), so a
+        # revocation can refuse every token issued before it, even in the same second
+        "iat": now.timestamp(),
+        "exp": now + lifetime,  # PyJWT turns the datetime into whole Unix seconds
         "jti": jti,
     }
     token = jwt.encode(payload, key, algorithm=JWT_ALGORITHM)
@@ -172,7 +185,9 @@ def decode_token_claims(token: str, expected_type: TokenType, settings: Settings
     jti = payload["jti"]
     if payload["type"] != expected_type.value or user_id is None or not isinstance(jti, str):
         raise InvalidTokenError()
-    return TokenClaims(user_id=user_id, jti=jti)
+    # PyJWT has already checked that iat is a number: a Unix time, maybe with fractions
+    issued_at = datetime.fromtimestamp(float(payload["iat"]), tz=UTC)
+    return TokenClaims(user_id=user_id, jti=jti, issued_at=issued_at)
 
 
 def decode_token(token: str, expected_type: TokenType, settings: Settings) -> int:

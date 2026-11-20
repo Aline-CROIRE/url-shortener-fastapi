@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api.dependencies import SettingsDep
 from app.core.exceptions import InvalidTokenError, NotAuthenticatedError
-from app.core.security import TokenType, decode_token
+from app.core.security import TokenType, decode_token_claims, is_revoked
 from app.models import User
 
 # Reads "Authorization: Bearer <token>" and shows the "Authorize" button in Swagger,
@@ -51,15 +51,17 @@ async def get_current_user(
 
     Raises:
         NotAuthenticatedError: No token was sent.
-        InvalidTokenError: The token is bad, expired or a refresh token, or its
-            user was deleted or switched off.
+        InvalidTokenError: The token is bad, expired or a refresh token, its
+            user was deleted or switched off, or it was revoked (issued before
+            the user's tokens_valid_after).
     """
     if not token:
         raise NotAuthenticatedError()
-    user_id = decode_token(token, TokenType.ACCESS, settings)
+    claims = decode_token_claims(token, TokenType.ACCESS, settings)
     async with session_factory() as session:
-        user = await session.get(User, user_id)
-    if user is None or not user.is_active:
+        user = await session.get(User, claims.user_id)
+    # The user row is loaded anyway: checking a revocation here costs no extra query
+    if user is None or not user.is_active or is_revoked(claims.issued_at, user.tokens_valid_after):
         raise InvalidTokenError()
     request.state.user_id = user.id  # for the security log (who got a 403)
     return user

@@ -4,6 +4,7 @@ import logging
 import re
 import secrets
 from collections.abc import Iterator
+from datetime import UTC, datetime
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +17,7 @@ from app.core.security import (
     create_access_token,
     decode_token_claims,
     hash_password,
+    is_revoked,
     issue_refresh_token,
     verify_password,
 )
@@ -177,12 +179,19 @@ class AuthService:
             if not first_use and await self._refresh_tokens.was_used(claims.jti, claims.user_id):
                 reused = True
                 await self._refresh_tokens.revoke_all(claims.user_id)
+                # ...and the ACCESS tokens too, at once (not up to 15 minutes later)
+                await self._users.revoke_tokens(claims.user_id, datetime.now(UTC))
             user = await self._users.get(claims.user_id)
-            allowed = first_use and user is not None and user.is_active
+            allowed = (
+                first_use
+                and user is not None
+                and user.is_active
+                and not is_revoked(claims.issued_at, user.tokens_valid_after)
+            )
         # Raise only AFTER the block: raising inside it would roll the revocation back
         if reused:
             security_logger.warning(
-                "Refresh token reuse for user_id=%s: all refresh tokens revoked",
+                "Refresh token reuse for user_id=%s: all tokens revoked",
                 claims.user_id,
             )
         if not allowed:
