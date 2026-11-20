@@ -10,6 +10,7 @@ from pydantic import (
     ConfigDict,
     Field,
     HttpUrl,
+    UrlConstraints,
     ValidationInfo,
     field_validator,
     model_validator,
@@ -22,7 +23,11 @@ from app.schemas.user import OwnerRead
 
 ALIAS_PATTERN = r"^[A-Za-z0-9_-]+$"
 # Aliases that would clash with the app's own paths (/docs, /health, /api/...)
-RESERVED_ALIASES = frozenset({"api", "docs", "redoc", "health", "openapi", "static", "admin"})
+RESERVED_ALIASES = frozenset(
+    {"api", "docs", "redoc", "openapi", "openapi.json", "admin", "health", "static"}
+)
+# The longest original URL accepted: a common limit that browsers and proxies handle
+MAX_URL_LENGTH = 2048
 MAX_TAGS_PER_URL = 10
 
 
@@ -51,6 +56,29 @@ def remove_duplicate_tags(tags: list[str]) -> list[str]:
     return unique
 
 
+def refuse_credentials(url: HttpUrl) -> HttpUrl:
+    """Refuse a URL with a user name or password in it (https://user:pw@site/).
+
+    The short link would show the password to everyone who opens it, and
+    "https://google.com@evil.example" is a phishing trick: it LOOKS like
+    google.com, but the browser goes to evil.example.
+
+    Raises:
+        ValueError: If the URL contains a user name or a password.
+    """
+    if url.username or url.password:
+        raise ValueError(
+            "A URL with a user name or password in it is not allowed: everyone who "
+            "opens the short link would see it."
+        )
+    return url
+
+
+# A link people may be sent to: http or https only (HttpUrl refuses javascript:,
+# data:, file:, ...), at most MAX_URL_LENGTH characters, and no user name or password
+WebUrl = Annotated[
+    HttpUrl, UrlConstraints(max_length=MAX_URL_LENGTH), AfterValidator(refuse_credentials)
+]
 # A timezone-aware datetime that must be in the future
 FutureDatetime = Annotated[AwareDatetime, AfterValidator(check_in_future)]
 # Up to 10 clean tag names, duplicates (ignoring case) removed
@@ -67,7 +95,7 @@ class URLCreate(BaseModel):
 
     model_config = ConfigDict(extra="forbid")  # unknown fields -> 422, not silently ignored
 
-    original_url: HttpUrl = Field(examples=["https://www.python.org/about/"])
+    original_url: WebUrl = Field(examples=["https://www.python.org/about/"])
     custom_alias: str | None = Field(
         default=None,
         min_length=3,
@@ -104,7 +132,7 @@ class URLUpdate(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    original_url: HttpUrl | None = None
+    original_url: WebUrl | None = None
     is_active: bool | None = None
     expires_at: FutureDatetime | None = Field(
         default=None, description="Send null to remove the expiry date"

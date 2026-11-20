@@ -107,9 +107,14 @@ def get_url_service(
     settings: SettingsDep,
 ) -> URLService:
     """Build the URL service for create, update and delete (write side)."""
-    # WRITE side: create / update / delete. base_url lets it refuse links to itself.
+    # WRITE side: create / update / delete. own_hosts lets it refuse links to itself.
     return URLService(
-        session=db, urls=urls, users=users, tags=tags, cache=cache, base_url=settings.base_url
+        session=db,
+        urls=urls,
+        users=users,
+        tags=tags,
+        cache=cache,
+        own_hosts=settings.own_host_names,
     )
 
 

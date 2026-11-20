@@ -29,6 +29,12 @@ pycparser==3.12
 PyJWT==2.15.1
 # Reads the OAuth2 login FORM (application/x-www-form-urlencoded)
 python-multipart==0.0.34
+# Login rate limit (slowapi, on top of "limits"; in-memory now, Redis in Module 8)
+slowapi==0.1.10
+limits==5.8.0
+Deprecated==3.0.1
+wrapt==2.5.2
+packaging==26.3
 
 # Cache: Redis (cache-aside for redirects)
 redis==8.1.0
