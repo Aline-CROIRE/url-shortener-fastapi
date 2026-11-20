@@ -37,9 +37,8 @@ from app.services.password_work import run_password_work
 
 security_logger = logging.getLogger("app.security")
 
-EMAIL_TAKEN = ("email", "This email is already registered.")
+# A taken EMAIL is never reported (see register); a taken chosen USERNAME is
 USERNAME_TAKEN = ("username", "This username is already taken.")
-TAKEN_MESSAGES = {"uq_users_email": EMAIL_TAKEN, "uq_users_username": USERNAME_TAKEN}
 
 # A made username: the start of the email, then a random number if it is taken
 USERNAME_ATTEMPTS = 5  # the plain name + 4 numbered tries, then ask the user to choose
@@ -93,28 +92,36 @@ class AuthService:
         self._settings = settings
         self._refresh_tokens = refresh_tokens or RefreshTokenRepository(session)
 
-    async def register(self, data: UserRegister) -> User:
+    async def register(self, data: UserRegister) -> User | None:
         """Create a new account; only the password's hash is stored.
+
+        Nobody may learn which emails exist, so a taken email is NOT an error: it
+        gets the same answer as a new one (the route always says 202), takes the
+        same slow hash (same response time), changes nothing and returns None. It
+        is logged, because many of them can mean someone is checking emails.
 
         The unique constraints in Postgres are the real guard: they also catch two
         registrations at the same moment, which a "SELECT first" check would miss.
 
+        Returns:
+            The new user, or None if the email was already registered.
+
         Raises:
-            ConflictError: The email (or the username the client chose) is taken,
-                or no free username could be made (409).
+            ConflictError: The username the client CHOSE is taken, or no free
+                username could be made (409). Usernames are public, and this is
+                only reached for a new email, so it reveals nothing about emails.
         """
-        # A taken email can be refused cheaply: do it BEFORE the slow (64 MB) hash, so
-        # a flood of repeated registrations cannot keep the server busy hashing
         async with self._session.begin():
-            if await self._users.get_by_email(data.email) is not None:
-                field, message = EMAIL_TAKEN
-                raise ConflictError(message, details={"field": field})
-        # Argon2 is slow on purpose: hash ONCE, in the small password pool, with no
-        # transaction open, so no database connection waits for it
+            email_taken = await self._users.get_by_email(data.email) is not None
+        # ALWAYS hash, also for a taken email: otherwise the faster answer would show
+        # that the email exists. The small password pool keeps this from overloading.
         hashed = await run_password_work(hash_password, data.password.get_secret_value())
+        if email_taken:
+            self._log_taken_email(data.email)
+            return None
+
         chosen = data.username
         candidates = [chosen] if chosen else username_candidates(data.email)
-
         for username in candidates:
             try:
                 async with self._session.begin():
@@ -122,17 +129,27 @@ class AuthService:
                     return await self._users.add(user)
             except IntegrityError as exc:
                 constraint = unique_violation_constraint(exc)
+                if constraint == "uq_users_email":
+                    # Another request registered this email a moment ago: same quiet answer
+                    self._log_taken_email(data.email)
+                    return None
                 if constraint == "uq_users_username" and chosen is None:
                     continue  # our own made-up name was taken: try the next one
-                taken = TAKEN_MESSAGES.get(constraint or "")
-                if taken is None:
+                if constraint != "uq_users_username":
                     raise  # another constraint: the global handler decides
-                field, message = taken
+                field, message = USERNAME_TAKEN
                 raise ConflictError(message, details={"field": field}) from exc
 
         raise ConflictError(
             "Could not find a free username. Please choose one and send it as 'username'.",
             details={"field": "username"},
+        )
+
+    @staticmethod
+    def _log_taken_email(email: str) -> None:
+        """Log a registration for an email that is already registered (masked)."""
+        security_logger.info(
+            "Registration for an email that is already registered: %s", mask_email(email)
         )
 
     async def login(self, email: str, password: str) -> TokenPair:

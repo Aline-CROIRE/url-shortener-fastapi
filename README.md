@@ -230,7 +230,7 @@ python -m app.scripts.seed         # fill the database with sample data
 
 | Method | Endpoint | What it does | Who may call it |
 |---|---|---|---|
-| `POST` | `/api/v1/auth/register/` | Create an account (email + password) | Anyone; at most 10 accounts per hour per client (`429`) |
+| `POST` | `/api/v1/auth/register/` | Create an account (email + password); `202`, the same answer for every email | Anyone; at most 10 per hour per client (`429`) |
 | `POST` | `/api/v1/auth/login/` | Log in (OAuth2 form), get an access + refresh token | Anyone; at most 5 tries per minute per IP (`429`) |
 | `POST` | `/api/v1/auth/refresh/` | Swap a refresh token for a new token pair (each refresh token works once) | Anyone with a refresh token |
 | `GET` | `/api/v1/auth/me/` | The user of the access token | Logged in |
@@ -282,7 +282,8 @@ changes their own URLs. The redirect (`/{short_code}/`) and `/health` stay publi
 
 ```bash
 # 1. Create an account: only email and password (8-128 characters) are needed.
-#    The answer is {"id", "email", "tier"}; every account starts on the free tier.
+#    The answer is 202 {"message": ...} whether the email is new or already taken
+#    (so nobody can find out which emails exist); accounts start on the free tier.
 curl -X POST http://localhost:8000/api/v1/auth/register/ \
   -H "Content-Type: application/json" \
   -d '{"email": "aline@example.com", "password": "a-long-passphrase"}'
@@ -346,8 +347,15 @@ curl -X POST http://localhost:8000/api/v1/auth/refresh/ \
   Cyrillic "a") cannot create an account that looks like someone else's.
 - A wrong password, an unknown email and a switched-off account all get the **same** `401`,
   and an unknown email still runs one password check, so neither the answer nor the response
-  time shows which emails are registered. (Registering with a taken email does answer `409`,
-  as the specification asks.)
+  time shows which emails are registered.
+- **Register reveals nothing either**: it answers `202` with the same message whether the
+  email is new or already registered, runs the same slow password hash in both cases (same
+  response time), and never changes an existing account. Taken emails are logged (masked),
+  so an admin can see someone checking many emails. This **deliberately replaces brief
+  tests #1 and #4** (`201` with `id`, `email`, `tier`, and `409` for a taken email): both
+  answers would tell an attacker that the email is registered. After logging in,
+  `GET /auth/me/` shows the account. A chosen `username` that is taken still answers `409`
+  (usernames are public, and that check runs only for a new email).
 - Token responses send `Cache-Control: no-store`, so no browser or proxy keeps a copy.
 - `username` is optional when registering: it is made from the email (`aline` from
   `aline@example.com`), with a random number added if that name is taken.
@@ -412,8 +420,8 @@ send again.
   lock the URL row. Requests never wait for each other in a circle, so they cannot deadlock.
 - **A visit is not an edit:** counting a click keeps `updated_at` unchanged, and so does
   recording a login (`last_login`).
-- **Two registrations with the same email:** the unique rule in Postgres decides, so the
-  second one gets `409`, never a `500`. If two people's made-up usernames clash (both
+- **Two registrations with the same email:** the unique rule in Postgres decides, so only
+  one account is created and the second request gets the same quiet `202`, never a `500`. If two people's made-up usernames clash (both
   `aline`), the second simply gets `aline` plus a random number.
 - **Login does not hold the database:** the slow password check runs after the read
   transaction is closed, so no pooled connection waits for it.
@@ -557,9 +565,9 @@ For an API this list fits even better than the web Top 10.
   everyone out of login) unless `FORWARDED_ALLOW_IPS` is set to the proxy's address: then
   Gunicorn trusts `X-Forwarded-For` from that proxy only. The app itself never reads
   `X-Forwarded-For`: anyone can fake it.
-- **Registering with a taken email answers `409`** (the specification asks for it), which tells
-  that the email is registered. Register is limited to 10 accounts per hour per client, which
-  makes checking many emails slow.
+- **Someone who registers with an email that is already taken** gets the same "OK" as
+  anyone else and can then not log in with their new password, with no explanation. Real
+  systems email the address's owner instead; this app sends no email (a later module).
 - **Tags are shared by everyone** (Module 6 design): a new URL gets the tag's first spelling
   ("Marketing"), which shows that someone already used that tag name. Tag names are not secret.
 - **Switching a user off** stops their tokens at once, but their short links keep redirecting

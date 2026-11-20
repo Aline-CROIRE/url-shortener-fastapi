@@ -8,8 +8,6 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, SecretStr, field_validator
 
-from app.models.user import UserTier
-from app.schemas.base import ORMModel
 from app.schemas.user import USERNAME_MAX_LENGTH, USERNAME_MIN_LENGTH, USERNAME_PATTERN
 
 PASSWORD_MIN_LENGTH = 8
@@ -68,12 +66,20 @@ class UserRegister(BaseModel):
         return password
 
 
-class UserOut(ORMModel):
-    """The new account as register returns it: no password hash, no personal data."""
+# The ONE answer register gives, whether the email was new or already taken
+REGISTER_MESSAGE = (
+    "If this email can be used, the account is ready: log in with your email and password."
+)
 
-    id: int
-    email: EmailStr
-    tier: UserTier
+
+class RegisterAccepted(BaseModel):
+    """What POST /auth/register/ answers, the same for every email (202).
+
+    No id, email or tier: those would show whether the email was already
+    registered. After logging in, GET /auth/me/ shows the account.
+    """
+
+    message: str = REGISTER_MESSAGE
 
 
 class TokenPair(BaseModel):

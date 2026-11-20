@@ -19,7 +19,7 @@ from app.core.client import client_ip
 from app.core.exceptions import InvalidCredentialsError
 from app.core.logging import mask_email
 from app.core.rate_limit import limiter, login_rate_limit, register_rate_limit
-from app.schemas.auth import RefreshIn, TokenPair, UserOut, UserRegister
+from app.schemas.auth import RefreshIn, RegisterAccepted, TokenPair, UserRegister
 from app.schemas.user import UserRead
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
@@ -34,16 +34,19 @@ def no_store(response: Response) -> None:
     response.headers["Pragma"] = "no-cache"
 
 
-@router.post("/register", status_code=status.HTTP_201_CREATED, include_in_schema=False)
+@router.post("/register", status_code=status.HTTP_202_ACCEPTED, include_in_schema=False)
 @router.post(
     "/register/",
-    status_code=status.HTTP_201_CREATED,
+    status_code=status.HTTP_202_ACCEPTED,
     summary="Create an account",
     description=(
         "Only `email` and `password` (8-128 characters) are needed; `username` is "
         "optional and made from the email when missing. Every account starts on the "
-        "free tier. Only a hash of the password is stored. At most 10 new accounts "
-        "per hour per client (429 after that)."
+        "free tier. Only a hash of the password is stored. **The answer is the same "
+        "(202) whether the email is new or already registered**, so nobody can find "
+        "out which emails exist: log in to use the account, and GET /auth/me/ shows "
+        "it. A chosen `username` that is taken gives 409 (usernames are public). At "
+        "most 10 registrations per hour per client (429 after that)."
     ),
     responses={**CONFLICT, **TOO_MANY_REQUESTS, **VALIDATION_ERROR, **INTERNAL_ERROR},
 )
@@ -55,10 +58,10 @@ async def register(
     request: Request,  # slowapi reads the client from it
     payload: Annotated[UserRegister, Body(examples=[REGISTER_EXAMPLE])],
     service: AuthServiceDep,
-) -> UserOut:
-    """Create an account."""
-    user = await service.register(payload)
-    return UserOut.model_validate(user)
+) -> RegisterAccepted:
+    """Create an account (one answer for every email)."""
+    await service.register(payload)
+    return RegisterAccepted()
 
 
 @router.post("/login", include_in_schema=False)
