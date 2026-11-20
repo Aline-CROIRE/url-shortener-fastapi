@@ -657,8 +657,9 @@ def test_a_token_in_the_url_is_ignored(db_client: TestClient) -> None:
 
 def test_an_old_session_cookie_is_ignored(db_client: TestClient) -> None:
     get_tokens(db_client)
+    db_client.cookies.set("session", "anything")  # what the old cookie login used
 
-    response = db_client.get(f"{AUTH}/me/", cookies={"session": "anything"})
+    response = db_client.get(f"{AUTH}/me/")
 
     assert response.status_code == 401
 

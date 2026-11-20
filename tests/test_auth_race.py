@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.pool import NullPool
 
 import app.services.auth as auth_service_module
-from app.core.config import Settings
+from app.core.config import Settings, get_settings
 from app.core.exceptions import ConflictError
 from app.models import User
 from app.repositories import UserRepository
@@ -49,6 +49,11 @@ async def engine(test_settings: Settings) -> AsyncIterator[AsyncEngine]:
             for domain in DOMAINS:
                 await connection.execute(delete(User).where(User.email.like(f"%@{domain}")))
         await engine.dispose()
+
+
+def make_service(session: AsyncSession) -> AuthService:
+    """An AuthService on this session, exactly as the app builds it."""
+    return AuthService(session=session, users=UserRepository(session), settings=get_settings())
 
 
 async def wait_until_blocked(engine: AsyncEngine, racing: asyncio.Task[User]) -> None:
@@ -86,7 +91,7 @@ async def register_while_first_holds(engine: AsyncEngine, held: User, data: User
         first.add(held)
         await first.flush()  # the row exists, but only for the first session
 
-        service = AuthService(session=second, users=UserRepository(second))
+        service = make_service(second)
         racing = asyncio.create_task(service.register(data))
         await wait_until_blocked(engine, racing)
 
@@ -147,7 +152,7 @@ async def test_it_gives_up_with_409_when_no_free_username_is_found(
         await session.commit()
 
     async with sessions() as session:
-        service = AuthService(session=session, users=UserRepository(session))
+        service = make_service(session)
         with pytest.raises(ConflictError) as error:
             await service.register(UserRegister(email=f"unlucky@{DOMAINS[1]}", password=PASSWORD))
 

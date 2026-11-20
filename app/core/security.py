@@ -1,6 +1,7 @@
 """Password hashing (Argon2id via pwdlib) and JWT access/refresh tokens (PyJWT, HS256)."""
 
 import secrets
+import unicodedata
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 
@@ -19,18 +20,25 @@ from app.core.exceptions import InvalidTokenError
 # A new random salt is made for every hash and stored inside the hash string.
 _password_hash = PasswordHash((Argon2Hasher(),))
 
-SESSION_COOKIE = "session"  # the cookie the browser sends back after login
-SESSION_USER_KEY = "user_id"  # what the signed session cookie stores
-
 # A real hash of a random password nobody knows: when the email is unknown, login
 # still runs one verification against it, so the response time does not reveal
 # which emails are registered
 DUMMY_HASH = _password_hash.hash(secrets.token_urlsafe(16))
 
 
+def _normalize(password: str) -> str:
+    """Return the password in Unicode NFKC form (NIST SP 800-63B).
+
+    "é" can arrive as ONE character or as "e" + an accent mark, depending on the
+    keyboard. After NFKC both are the same text, so both log in. Letter case and
+    spaces are never changed.
+    """
+    return unicodedata.normalize("NFKC", password)
+
+
 def hash_password(password: str) -> str:
     """Return the Argon2id hash of a password (the only form that is stored)."""
-    return _password_hash.hash(password)
+    return _password_hash.hash(_normalize(password))
 
 
 def verify_password(password: str, hashed_password: str) -> bool:
@@ -40,7 +48,7 @@ def verify_password(password: str, hashed_password: str) -> bool:
     for accounts that cannot log in) also returns False instead of raising.
     """
     try:
-        return _password_hash.verify(password, hashed_password)
+        return _password_hash.verify(_normalize(password), hashed_password)
     except UnknownHashError:
         return False
 

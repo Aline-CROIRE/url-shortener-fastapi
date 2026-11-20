@@ -1,6 +1,7 @@
 """Errors the app raises on purpose; each one becomes a JSON error response."""
 
-from typing import Any
+from collections.abc import Mapping
+from typing import Any, ClassVar
 
 
 class AppError(Exception):
@@ -12,6 +13,9 @@ class AppError(Exception):
     status_code: int = 500
     code: str = "app_error"
     message: str = "An application error occurred."
+    # Extra HTTP headers for the response (e.g. WWW-Authenticate on a 401).
+    # ClassVar + Mapping: shared by the class and only read, never changed
+    headers: ClassVar[Mapping[str, str] | None] = None
 
     def __init__(self, message: str | None = None, details: Any = None) -> None:
         """Store the error message and extra details.
@@ -110,7 +114,9 @@ class NotAuthenticatedError(AppError):
 
     status_code = 401
     code = "not_authenticated"
-    message = "Log in first: POST /api/v1/auth/login/."
+    message = "Log in first: POST /api/v1/auth/login/, then send 'Authorization: Bearer <token>'."
+    # RFC 6750: a 401 tells the client which kind of login the server expects
+    headers: ClassVar[Mapping[str, str]] = {"WWW-Authenticate": "Bearer"}
 
 
 class InvalidCredentialsError(AppError):
@@ -119,17 +125,20 @@ class InvalidCredentialsError(AppError):
     status_code = 401
     code = "invalid_credentials"
     message = "The email or password is wrong."
+    headers: ClassVar[Mapping[str, str]] = {"WWW-Authenticate": "Bearer"}
 
 
 class InvalidTokenError(AppError):
-    """Raised for any bad JWT: forged, expired, malformed or the wrong type (401).
+    """Raised for any bad JWT, or a JWT whose user is gone or switched off (401).
 
-    One message for every case, so an attacker learns nothing about why it failed.
+    Bad means forged, expired, malformed or the wrong type. One message for every
+    case, so an attacker learns nothing about why it failed.
     """
 
     status_code = 401
     code = "invalid_token"
     message = "The token is invalid or has expired."
+    headers: ClassVar[Mapping[str, str]] = {"WWW-Authenticate": 'Bearer error="invalid_token"'}
 
 
 class ShortCodeGenerationError(AppError):

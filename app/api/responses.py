@@ -47,9 +47,9 @@ CONFLICT: dict[int | str, dict[str, Any]] = {
 }
 UNAUTHORIZED: dict[int | str, dict[str, Any]] = {
     status.HTTP_401_UNAUTHORIZED: _error_doc(
-        "Not logged in",
-        "not_authenticated",
-        "Log in first: POST /api/v1/auth/login/.",
+        "No token, or a bad, expired or wrong-type token",
+        "invalid_token",
+        "The token is invalid or has expired.",
     ),
 }
 INVALID_CURSOR: dict[int | str, dict[str, Any]] = {

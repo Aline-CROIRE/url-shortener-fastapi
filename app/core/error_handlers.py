@@ -35,7 +35,7 @@ def error_response(
 
 async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
     """Return the JSON error for one of our own AppError exceptions."""
-    return error_response(exc.status_code, exc.code, exc.message, exc.details)
+    return error_response(exc.status_code, exc.code, exc.message, exc.details, exc.headers)
 
 
 async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:

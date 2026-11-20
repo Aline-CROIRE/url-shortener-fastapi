@@ -11,7 +11,7 @@ from app.schemas.analytics import CountryCount, DailyCount, URLAnalytics
 from app.schemas.click import ClickRead
 from app.schemas.tag import TagRead
 from app.schemas.url import URLCreate, URLRead, URLUpdate
-from app.schemas.user import UserCreate, UserRead
+from app.schemas.user import UserRead
 
 NOW = datetime(2026, 11, 12, 10, 0, tzinfo=UTC)
 BASE_URL = "http://short.test/"
@@ -52,23 +52,6 @@ def error_fields(error: pytest.ExceptionInfo[ValidationError]) -> set[str]:
 
 
 # ---------- users ----------
-
-
-def test_user_create_lowercases_email() -> None:
-    user = UserCreate(email="Aline@Example.COM", username="aline", password="long-enough")
-    assert user.email == "aline@example.com"
-
-
-def test_user_create_rejects_bad_input() -> None:
-    with pytest.raises(ValidationError) as error:
-        UserCreate(email="not-an-email", username="a!", password="short")
-    assert error_fields(error) == {"email", "username", "password"}
-
-
-def test_password_is_hidden_when_printed() -> None:
-    user = UserCreate(email="a@example.com", username="aline", password="super-secret")
-    assert "super-secret" not in repr(user)
-    assert user.password.get_secret_value() == "super-secret"
 
 
 def test_user_read_never_shows_the_password_hash() -> None:
