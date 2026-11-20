@@ -17,7 +17,7 @@ from pydantic import (
 )
 
 from app.models.url import SHORT_CODE_MAX_LENGTH
-from app.schemas.base import ORMModel
+from app.schemas.base import ORMModel, SafeText, VisibleText
 from app.schemas.tag import TagName, TagRead
 from app.schemas.user import OwnerRead
 
@@ -28,6 +28,8 @@ RESERVED_ALIASES = frozenset(
 )
 # The longest original URL accepted: a common limit that browsers and proxies handle
 MAX_URL_LENGTH = 2048
+# Longest description: enough for a summary, too small to fill the database
+DESCRIPTION_MAX_LENGTH = 2000
 MAX_TAGS_PER_URL = 10
 
 
@@ -137,8 +139,8 @@ class URLUpdate(BaseModel):
     expires_at: FutureDatetime | None = Field(
         default=None, description="Send null to remove the expiry date"
     )
-    title: str | None = Field(default=None, max_length=255)
-    description: str | None = None
+    title: VisibleText | None = Field(default=None, max_length=255)
+    description: SafeText | None = Field(default=None, max_length=DESCRIPTION_MAX_LENGTH)
     tags: TagList | None = Field(default=None, description="Replaces all tags")
 
     @field_validator("original_url", "is_active", "tags")

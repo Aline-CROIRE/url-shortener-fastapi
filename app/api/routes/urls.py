@@ -3,6 +3,7 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Body, Query, Response, status
+from pydantic import AfterValidator
 
 from app.api.auth import CurrentUser
 from app.api.dependencies import SettingsDep, URLReadServiceDep, URLServiceDep
@@ -21,6 +22,7 @@ from app.core.config import Settings
 from app.models import URL
 from app.models.tag import TAG_NAME_MAX_LENGTH
 from app.repositories.url import MAX_LIMIT, URLFilters, URLSort
+from app.schemas.base import refuse_nul
 from app.schemas.url import URLCreate, URLPage, URLRead, URLUpdate
 
 router = APIRouter(prefix="/urls", tags=["URLs"])
@@ -100,6 +102,7 @@ async def list_urls(
     tag: Annotated[
         str | None,
         Query(min_length=1, max_length=TAG_NAME_MAX_LENGTH, description="Tag name (any case)"),
+        AfterValidator(refuse_nul),
     ] = None,
     is_active: Annotated[
         bool | None, Query(description="Only switched on (true) or off (false)")
@@ -108,7 +111,9 @@ async def list_urls(
         bool | None, Query(description="Only expired (true) or not expired (false)")
     ] = None,
     search: Annotated[
-        str | None, Query(min_length=1, max_length=200, description="Text in the URL or title")
+        str | None,
+        Query(min_length=1, max_length=200, description="Text in the URL or title"),
+        AfterValidator(refuse_nul),
     ] = None,
 ) -> URLPage:
     """List your short URLs."""
