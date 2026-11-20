@@ -1,0 +1,31 @@
+# Dependabot: opens pull requests that update outdated or vulnerable dependencies
+# (OWASP A03:2025 Software Supply Chain Failures). Each PR runs the full CI, so an
+# update is merged only when every test still passes.
+# Dependabot reads this file from the DEFAULT branch (main), so it starts working
+# once Module 7 is merged into main.
+version: 2
+updates:
+  # Python packages (requirements.txt, requirements-dev.txt)
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "build"
+
+  # The GitHub Actions used in .github/workflows (actions/checkout, setup-python)
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "ci"
+
+  # The Docker base images (python:3.14-slim in the Dockerfile)
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "build"
