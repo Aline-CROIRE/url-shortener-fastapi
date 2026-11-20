@@ -38,7 +38,7 @@ def many_ip_addresses(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 def register(client: TestClient, email: str = EMAIL) -> None:
     response = client.post(f"{AUTH}/register/", json={"email": email, "password": PASSWORD})
-    assert response.status_code in (201, 202), response.text
+    assert response.status_code == 202, response.text
 
 
 def login(client: TestClient, email: str = EMAIL, password: str = "wrong-password") -> Any:

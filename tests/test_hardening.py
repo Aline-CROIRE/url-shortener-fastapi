@@ -20,7 +20,6 @@ from fastapi.testclient import TestClient
 from starlette.requests import Request
 
 import app.core.security as security_module
-import app.services.auth as auth_service_module
 from app.core.config import Settings
 from app.core.error_handlers import unhandled_exception_handler
 from app.core.exceptions import InvalidTokenError
@@ -191,27 +190,12 @@ def test_register_is_limited_per_ip(db_client: TestClient) -> None:
         for n in range(11)
     ]
 
-    assert codes == [201] * 10 + [429]
+    assert codes == [202] * 10 + [429]
     # The login counter is separate: logging in still works
     login = db_client.post(
         f"{AUTH}/login/", data={"username": "user0@example.com", "password": PASSWORD}
     )
     assert login.status_code == 200
-
-
-def test_a_taken_email_is_refused_before_the_slow_hash(
-    db_client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    db_client.post(f"{AUTH}/register/", json={"email": "taken@example.com", "password": PASSWORD})
-    hashed: list[str] = []
-    monkeypatch.setattr(auth_service_module, "hash_password", lambda p: hashed.append(p) or "h")
-
-    response = db_client.post(
-        f"{AUTH}/register/", json={"email": "TAKEN@example.com", "password": PASSWORD}
-    )
-
-    assert response.status_code == 409
-    assert hashed == []  # no 64 MB Argon2 run for a request that must fail anyway
 
 
 @pytest.mark.anyio

@@ -3,8 +3,13 @@
 import pytest
 from pydantic import ValidationError
 
-from app.models import User, UserTier
-from app.schemas.auth import RefreshIn, TokenPair, UserOut, UserRegister
+from app.schemas.auth import (
+    REGISTER_MESSAGE,
+    RefreshIn,
+    RegisterAccepted,
+    TokenPair,
+    UserRegister,
+)
 
 PASSWORD = "a-long-passphrase"
 
@@ -86,17 +91,12 @@ def test_register_hides_the_password_when_printed() -> None:
     assert PASSWORD not in repr(UserRegister(email="a@example.com", password=PASSWORD))
 
 
-# ---------- UserOut ----------
+# ---------- RegisterAccepted ----------
 
 
-def test_user_out_shows_only_id_email_and_tier() -> None:
-    user = User(id=5, email="a@example.com", username="a", hashed_password="h", tier=UserTier.FREE)
-
-    assert UserOut.model_validate(user).model_dump(mode="json") == {
-        "id": 5,
-        "email": "a@example.com",
-        "tier": "free",
-    }
+def test_register_answer_carries_no_account_data() -> None:
+    # The same answer for a new and a taken email: nothing to compare
+    assert RegisterAccepted().model_dump() == {"message": REGISTER_MESSAGE}
 
 
 # ---------- TokenPair and RefreshIn ----------

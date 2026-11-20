@@ -38,7 +38,7 @@ def attempt(
 
 def register(client: TestClient) -> None:
     response = client.post("/api/v1/auth/register/", json={"email": EMAIL, "password": PASSWORD})
-    assert response.status_code == 201
+    assert response.status_code == 202
 
 
 def test_the_6th_login_in_a_minute_is_429(db_client: TestClient) -> None:

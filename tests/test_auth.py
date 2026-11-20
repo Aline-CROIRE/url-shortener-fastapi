@@ -61,7 +61,7 @@ def login(client: TestClient, email: str = EMAIL, password: str = PASSWORD) -> h
 
 def get_tokens(client: TestClient, email: str = EMAIL) -> dict[str, str]:
     """Register and log in; return the token pair."""
-    assert register(client, email).status_code == 201
+    assert register(client, email).status_code == 202
     response = login(client, email)
     assert response.status_code == 200, response.text
     return response.json()
@@ -164,15 +164,12 @@ BAD_TOKEN_KINDS = [
 # ---------- register ----------
 
 
-def test_register_returns_201_with_only_id_email_and_tier(db_client: TestClient) -> None:
+def test_register_answers_202_without_any_account_data(db_client: TestClient) -> None:
+    # Module 7 decision: one answer for every email (see tests/test_register_privacy.py)
     response = register(db_client, "Aline@Example.COM")
 
-    assert response.status_code == 201
-    body = response.json()
-    assert set(body) == {"id", "email", "tier"}
-    assert isinstance(body["id"], int)
-    assert body["email"] == EMAIL  # stored lower-case
-    assert body["tier"] == "free"
+    assert response.status_code == 202
+    assert set(response.json()) == {"message"}
     assert "set-cookie" not in response.headers  # no cookie sessions any more
 
 
@@ -185,20 +182,6 @@ def test_register_stores_only_an_argon2id_hash(db_client: TestClient, run_db: Ru
     assert user.hashed_password.startswith("$argon2id$")
     assert PASSWORD not in user.hashed_password
     assert verify_password(PASSWORD, user.hashed_password)
-
-
-@pytest.mark.parametrize("again", [EMAIL, "ALINE@EXAMPLE.COM", "  aline@example.com  "])
-def test_registering_the_same_email_again_is_409(
-    db_client: TestClient, run_db: RunDb, again: str
-) -> None:
-    register(db_client)
-
-    response = register(db_client, again)
-
-    assert response.status_code == 409
-    assert error_code(response) == "conflict"
-    assert response.json()["error"]["details"] == {"field": "email"}
-    assert count_users(run_db, EMAIL) == 1
 
 
 def test_a_chosen_username_that_is_taken_is_409(db_client: TestClient) -> None:
@@ -225,8 +208,8 @@ def test_a_made_username_gets_a_number_when_it_is_taken(
     db_client: TestClient, run_db: RunDb
 ) -> None:
     # Same name before the @, different domains: both must get an account (never 409)
-    assert register(db_client, "aline@first.com").status_code == 201
-    assert register(db_client, "aline@second.com").status_code == 201
+    assert register(db_client, "aline@first.com").status_code == 202
+    assert register(db_client, "aline@second.com").status_code == 202
 
     first = load_user(run_db, "aline@first.com")
     second = load_user(run_db, "aline@second.com")
@@ -252,7 +235,7 @@ def test_a_made_username_gets_a_number_when_it_is_taken(
 def test_a_made_username_is_always_a_valid_username(
     db_client: TestClient, run_db: RunDb, email: str
 ) -> None:
-    assert register(db_client, email).status_code == 201
+    assert register(db_client, email).status_code == 202
 
     user = load_user(run_db, email)
 
@@ -315,7 +298,7 @@ def test_register_rejects_bad_input_with_422(db_client: TestClient, body: dict[s
 def test_register_accepts_passwords_of_8_and_128_characters(
     db_client: TestClient, length: int
 ) -> None:
-    assert register(db_client, password="p" * length).status_code == 201
+    assert register(db_client, password="p" * length).status_code == 202
 
 
 def test_register_needs_a_json_body(db_client: TestClient) -> None:
@@ -794,7 +777,7 @@ def test_swagger_uses_the_oauth2_password_flow() -> None:
 def test_paths_without_the_trailing_slash_work(db_client: TestClient) -> None:
     assert (
         db_client.post(f"{AUTH}/register", json={"email": EMAIL, "password": PASSWORD}).status_code
-        == 201
+        == 202
     )
     tokens = db_client.post(f"{AUTH}/login", data={"username": EMAIL, "password": PASSWORD}).json()
     assert (

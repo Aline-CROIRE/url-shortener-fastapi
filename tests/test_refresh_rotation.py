@@ -48,7 +48,7 @@ RunDb = Callable[..., Any]
 def register_and_login(client: TestClient, email: str = EMAIL) -> dict[str, str]:
     assert (
         client.post(f"{AUTH}/register/", json={"email": email, "password": PASSWORD}).status_code
-        == 201
+        == 202
     )
     return login(client, email)
 

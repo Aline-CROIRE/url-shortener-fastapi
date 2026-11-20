@@ -14,7 +14,7 @@ import asyncio
 from collections.abc import AsyncIterator
 
 import pytest
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -56,7 +56,9 @@ def make_service(session: AsyncSession) -> AuthService:
     return AuthService(session=session, users=UserRepository(session), settings=get_settings())
 
 
-async def register_while_first_holds(engine: AsyncEngine, held: User, data: UserRegister) -> User:
+async def register_while_first_holds(
+    engine: AsyncEngine, held: User, data: UserRegister
+) -> User | None:
     """The first session inserts `held` (uncommitted); the second registers `data`."""
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     async with sessions() as first, sessions() as second:
@@ -71,14 +73,21 @@ async def register_while_first_holds(engine: AsyncEngine, held: User, data: User
         return await asyncio.wait_for(racing, timeout=10)
 
 
-async def test_the_same_email_at_the_same_moment_is_409_not_500(engine: AsyncEngine) -> None:
+async def test_the_same_email_at_the_same_moment_reveals_nothing_and_never_500s(
+    engine: AsyncEngine,
+) -> None:
     email = f"race@{DOMAINS[0]}"
     held = User(email=email, username="race-first", hashed_password="h")
 
-    with pytest.raises(ConflictError) as error:
-        await register_while_first_holds(engine, held, UserRegister(email=email, password=PASSWORD))
+    # The loser of the race gets the same quiet answer as any taken email (202)
+    result = await register_while_first_holds(
+        engine, held, UserRegister(email=email, password=PASSWORD)
+    )
 
-    assert error.value.details == {"field": "email"}
+    assert result is None  # no new account: the first one keeps the email
+    async with AsyncSession(engine) as session:
+        count = await session.scalar(select(func.count()).where(User.email == email))
+    assert count == 1
 
 
 async def test_the_same_made_username_at_the_same_moment_still_registers(
