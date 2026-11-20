@@ -141,6 +141,40 @@ class InvalidTokenError(AppError):
     headers: ClassVar[Mapping[str, str]] = {"WWW-Authenticate": 'Bearer error="invalid_token"'}
 
 
+class ForbiddenError(AppError):
+    """Logged in, but not allowed to do this (403 Forbidden).
+
+    401 = "who are you?" (no or bad token). 403 = "I know who you are, and no".
+    """
+
+    status_code = 403
+    code = "forbidden"
+    message = "You do not have permission to access this URL."
+
+
+class InsufficientTierError(ForbiddenError):
+    """The user's tier does not include this feature (403)."""
+
+    code = "insufficient_tier"
+    message = "This needs a Premium or Admin account."
+
+
+class FreeTierLimitError(ForbiddenError):
+    """A Free account already has the maximum number of active URLs (403)."""
+
+    code = "free_tier_limit"
+
+    def __init__(self, limit: int) -> None:
+        """Build the error for the given limit, with the way out in the message."""
+        super().__init__(
+            message=(
+                f"Free accounts can have at most {limit} active URLs. Switch one off or "
+                "delete one, or upgrade to Premium for unlimited URLs."
+            ),
+            details={"limit": limit},
+        )
+
+
 class ShortCodeGenerationError(AppError):
     """Raised when no unique short code could be generated (500 Internal Server Error)."""
 

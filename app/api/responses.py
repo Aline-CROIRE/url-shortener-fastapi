@@ -52,6 +52,13 @@ UNAUTHORIZED: dict[int | str, dict[str, Any]] = {
         "The token is invalid or has expired.",
     ),
 }
+FORBIDDEN: dict[int | str, dict[str, Any]] = {
+    status.HTTP_403_FORBIDDEN: _error_doc(
+        "Not allowed: someone else's URL, a Premium feature, or the Free limit",
+        "forbidden",
+        "You do not have permission to access this URL.",
+    ),
+}
 INVALID_CURSOR: dict[int | str, dict[str, Any]] = {
     status.HTTP_400_BAD_REQUEST: _error_doc(
         "Bad cursor",

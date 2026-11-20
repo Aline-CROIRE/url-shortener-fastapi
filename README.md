@@ -228,20 +228,52 @@ python -m app.scripts.seed         # fill the database with sample data
 
 ## API endpoints
 
-| Method | Endpoint | Description |
-|---|---|---|
-| `POST` | `/api/v1/auth/register/` | Create an account (email + password) |
-| `POST` | `/api/v1/auth/login/` | Log in (OAuth2 form) and get an access + refresh token |
-| `POST` | `/api/v1/auth/refresh/` | Swap a refresh token for a new token pair |
-| `GET` | `/api/v1/auth/me/` | The user of the access token |
-| `POST` | `/api/v1/urls/` | Create a short URL |
-| `GET` | `/api/v1/urls/` | List your URLs |
-| `GET` | `/api/v1/urls/{short_code}/` | Get URL details (owner, tags, click count) |
-| `PUT` | `/api/v1/urls/{short_code}/` | Update a URL |
-| `DELETE` | `/api/v1/urls/{short_code}/` | Delete a URL |
-| `GET` | `/api/v1/analytics/{short_code}/` | Click analytics (per country, city, day, referrer) |
-| `GET` | `/{short_code}/` | Redirect to the original URL (302) |
-| `GET` | `/health` | Database and cache status |
+| Method | Endpoint | What it does | Who may call it |
+|---|---|---|---|
+| `POST` | `/api/v1/auth/register/` | Create an account (email + password) | Anyone |
+| `POST` | `/api/v1/auth/login/` | Log in (OAuth2 form), get an access + refresh token | Anyone |
+| `POST` | `/api/v1/auth/refresh/` | Swap a refresh token for a new token pair | Anyone with a refresh token |
+| `GET` | `/api/v1/auth/me/` | The user of the access token | Logged in |
+| `POST` | `/api/v1/urls/` | Create a short URL | Logged in. Free: at most 10 active URLs, no custom alias |
+| `GET` | `/api/v1/urls/` | List URLs (cursor pages, filters) | Logged in: only your own URLs (also for an Admin) |
+| `GET` | `/api/v1/urls/{short_code}/` | URL details (owner, tags, click count) | The owner or an Admin |
+| `PUT` | `/api/v1/urls/{short_code}/` | Update a URL | The owner or an Admin |
+| `DELETE` | `/api/v1/urls/{short_code}/` | Soft-delete a URL | The owner or an Admin |
+| `GET` | `/api/v1/analytics/{short_code}/` | Click analytics (country, city, day, referrer) | Premium or Admin: own URLs (an Admin: any) |
+| `GET` | `/{short_code}/` | Redirect to the original URL (302) | Anyone (public) |
+| `GET` | `/health` | Database and cache status | Anyone |
+
+### Tiers and permissions
+
+Two different questions are checked, in this order:
+
+1. **Who are you?** (authentication) The Bearer token. Missing or bad: `401`.
+2. **May you do this?** (authorization) Not allowed: `403`.
+   - **By tier** (role-based): FastAPI dependencies in `app/api/permissions.py`.
+     `require_tier(...)` lets only the listed tiers through; `require_premium` = Premium or
+     Admin. Analytics use it, so a Free user gets `403` before the short code is even looked
+     at (and learns nothing about which codes exist).
+   - **By ownership** (object-level): in `app/services/urls.py`, where the URL is loaded.
+     Unknown or deleted code: `404`. Someone else's URL: `403`. An Admin may read, change and
+     delete any URL; it stays the owner's.
+
+| | Free | Premium | Admin |
+|---|---|---|---|
+| Active URLs (switched on, not deleted, not expired) | at most **10** | unlimited | unlimited |
+| Custom alias | no (`403`) | yes | yes |
+| Analytics | no (`403`) | own URLs | every URL |
+| Manage other people's URLs | no | no | yes |
+
+- The tier is read **from the database on every request**, never from the token, so a
+  promotion or a downgrade counts at once. Tiers are changed only directly in the database:
+  there is no public endpoint for it. A downgraded user keeps their URLs but cannot add a
+  new one while they have more than 10 active.
+- The limit belongs to the **account**, so every way to an 11th active URL is refused, not
+  only creating one: switching an old URL back on, or giving an expired one a new date, is
+  `403` too (even when an Admin makes the change). Editing a URL that stays active (title,
+  tags, target) is always allowed.
+- `owner_id`, `click_count` and `short_code` can never be sent (`422`): the owner always
+  comes from the token.
 
 ### Log in
 
@@ -318,7 +350,8 @@ curl -X POST http://localhost:8000/api/v1/urls/ -H "Authorization: Bearer $TOKEN
   -d '{"original_url": "https://www.python.org/", "custom_alias": "python", "tags": ["Marketing"]}'
 ```
 
-`custom_alias`, `expires_at` and `tags` are optional.
+`custom_alias`, `expires_at` and `tags` are optional. `custom_alias` needs a Premium or
+Admin account.
 
 ### List your URLs
 
@@ -343,7 +376,9 @@ All errors use the same format:
 
 Common status codes: `401` with a `WWW-Authenticate: Bearer` header (`not_authenticated`:
 no token sent; `invalid_token`: bad, expired or wrong-type token; `invalid_credentials`:
-wrong email or password), `404` not found, `409` alias,
+wrong email or password), `403` not allowed (`forbidden`: someone else's URL;
+`insufficient_tier`: a Premium feature; `free_tier_limit`: already 10 active URLs, with
+`"details": {"limit": 10}`), `404` not found, `409` alias,
 email or username already taken, `410` link expired or deleted, `422` invalid input
 (also `redirect_loop`: an original URL pointing back to this shortener is refused, because
 the short link would redirect to itself), `503` with `Retry-After` when Postgres cancelled
@@ -355,8 +390,15 @@ send again.
 - **Same new tags, different order:** tags are always inserted in sorted order, so the second
   request waits its turn instead of deadlocking.
 - **Two updates of one URL:** the update reads the URL with `SELECT ... FOR UPDATE`, so the
-  second waits for the first and then starts from its result (no mixed tag lists). Lock order
-  is always the URL row first, then tags; redirects only lock the URL row.
+  second waits for the first and then starts from its result (no mixed tag lists).
+- **The Free limit (check-then-act race):** "count the active URLs, then add one" would let
+  two requests both count 9 and both add one (11). So every write that can add an active
+  URL (create, switching on, a new expiry date) first locks the **owner's row**
+  (`SELECT ... FOR UPDATE` on `users`) in the same transaction: the second request waits,
+  then counts 10 and gets `403`. Tests run 6 creates at once on real Postgres connections
+  and always end with exactly 10.
+- **One lock order everywhere:** user row, then URL row, then tags (sorted). Redirects only
+  lock the URL row. Requests never wait for each other in a circle, so they cannot deadlock.
 - **A visit is not an edit:** counting a click keeps `updated_at` unchanged, and so does
   recording a login (`last_login`).
 - **Two registrations with the same email:** the unique rule in Postgres decides, so the

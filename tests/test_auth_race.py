@@ -11,11 +11,10 @@ first commits, the second gets a unique violation. That must become a clean
 """
 
 import asyncio
-import time
 from collections.abc import AsyncIterator
 
 import pytest
-from sqlalchemy import delete, select, text
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -31,6 +30,7 @@ from app.models import User
 from app.repositories import UserRepository
 from app.schemas.auth import UserRegister
 from app.services.auth import AuthService
+from tests.concurrency import wait_until_blocked
 
 pytestmark = pytest.mark.anyio
 
@@ -54,34 +54,6 @@ async def engine(test_settings: Settings) -> AsyncIterator[AsyncEngine]:
 def make_service(session: AsyncSession) -> AuthService:
     """An AuthService on this session, exactly as the app builds it."""
     return AuthService(session=session, users=UserRepository(session), settings=get_settings())
-
-
-async def wait_until_blocked(engine: AsyncEngine, racing: asyncio.Task[User]) -> None:
-    """Return once the racing registration is blocked on a row lock.
-
-    No fixed sleep, so the test is not flaky on a slow machine. If the racing task
-    ends before it ever waited, its own result (or real error) is raised at once.
-    """
-    deadline = time.monotonic() + 10
-    # AUTOCOMMIT: Postgres takes ONE snapshot of pg_stat_activity per transaction, so
-    # inside a single transaction the watcher would never see the second one start waiting
-    async with engine.connect() as connection:
-        watcher = await connection.execution_options(isolation_level="AUTOCOMMIT")
-        while time.monotonic() < deadline:
-            if racing.done():
-                await racing  # raises the task's real error, if it had one
-                raise AssertionError("the second registration finished without waiting")
-            waiting = await watcher.scalar(
-                text(
-                    "SELECT count(*) FROM pg_stat_activity "
-                    "WHERE wait_event_type = 'Lock' AND datname = current_database()"
-                )
-            )
-            if waiting:
-                return
-            await asyncio.sleep(0.02)
-    racing.cancel()
-    raise AssertionError("the second registration never waited for the first")
 
 
 async def register_while_first_holds(engine: AsyncEngine, held: User, data: UserRegister) -> User:

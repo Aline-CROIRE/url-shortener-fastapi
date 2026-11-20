@@ -25,7 +25,7 @@ TAGS = ["zz-lock-old", "zz-lock-first", "zz-lock-second"]
 
 def test_update_locks_the_url_row() -> None:
     statement = str(select(URL).with_for_update(of=URL).compile(dialect=postgresql.dialect()))
-    assert "FOR UPDATE OF urls" in statement  # what get_owned(for_update=True) adds
+    assert "FOR UPDATE OF urls" in statement  # what get_visible(for_update=True) adds
 
 
 @pytest.mark.anyio
@@ -49,7 +49,7 @@ async def test_second_update_waits_and_wins_cleanly(test_settings: Settings) -> 
         async with sessions() as first, sessions() as second:
             async with first.begin():
                 # Update 1 holds the row lock and changes the tags (not committed yet)
-                url = await URLRepository(first).get_owned("lock01", owner_id, for_update=True)
+                url = await URLRepository(first).get_visible("lock01", for_update=True)
                 assert url is not None
                 url.tags = await TagRepository(first).get_or_create_many(["zz-lock-first"])
                 await first.flush()
