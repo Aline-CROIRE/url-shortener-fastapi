@@ -17,6 +17,23 @@ class UserRepository:
         """Return the user with this id, or None."""
         return await self._session.get(User, user_id)
 
+    async def get_for_update(self, user_id: int) -> User | None:
+        """Return the user and LOCK their row until the transaction ends.
+
+        SELECT ... FOR UPDATE: a second transaction that wants the same lock waits
+        here. The Free limit uses it so "count, then insert" runs for one request
+        at a time per user (no check-then-act race).
+        populate_existing: use the values just read under the lock, never an older
+        copy this session may already hold.
+        """
+        statement = (
+            select(User)
+            .where(User.id == user_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        return await self._session.scalar(statement)
+
     async def get_by_email(self, email: str) -> User | None:
         """Return the user with this email (any letter case), or None."""
         # Emails are stored lower-case (UserRegister lower-cases them), so a plain

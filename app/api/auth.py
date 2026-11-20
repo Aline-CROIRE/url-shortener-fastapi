@@ -2,8 +2,9 @@
 
 After POST /api/v1/auth/login/ the client holds an access token and sends it with
 every request:  Authorization: Bearer <access token>
-Every endpoint that uses CurrentUser or CurrentOwnerId works only with a valid
-one, and the services filter all data by that user's id.
+Every endpoint that uses CurrentUser works only with a valid one. What the
+user may then do is checked by tier (app/api/permissions.py) and by ownership
+(app/services/urls.py).
 """
 
 from typing import Annotated
@@ -63,11 +64,3 @@ async def get_current_user(
 
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
-
-
-async def get_current_owner_id(user: CurrentUser) -> int:
-    """Return the current user's id: every URL query is filtered by it."""
-    return user.id
-
-
-CurrentOwnerId = Annotated[int, Depends(get_current_owner_id)]

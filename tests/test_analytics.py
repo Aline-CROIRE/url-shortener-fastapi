@@ -191,9 +191,10 @@ def test_url_without_clicks(db_client: TestClient, run_db: RunDb, owner_id: int)
     }
 
 
-def test_unknown_or_someone_elses_url_returns_404(
+def test_unknown_url_is_404_and_someone_elses_is_403(
     db_client: TestClient, run_db: RunDb, owner_id: int
 ) -> None:
+    # Module 7, decision 6: 404 = no such URL; 403 = it exists but is not yours
     async def work(session: AsyncSession) -> None:
         stranger = User(email="stranger@example.com", username="stranger", hashed_password="h")
         session.add(URL(original_url="https://x.example/", short_code="theirs1", owner=stranger))
@@ -201,7 +202,7 @@ def test_unknown_or_someone_elses_url_returns_404(
     run_db(work)
 
     assert db_client.get(f"{API}/nothing").status_code == 404
-    assert db_client.get(f"{API}/theirs1").status_code == 404
+    assert db_client.get(f"{API}/theirs1").status_code == 403
 
 
 def test_deleted_url_returns_404(db_client: TestClient, stats_code: str) -> None:

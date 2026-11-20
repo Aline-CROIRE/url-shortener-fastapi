@@ -176,13 +176,13 @@ class URLRepository:
         """Return the URL with this short code (deleted ones too), or None."""
         return await self._session.scalar(select(URL).where(URL.short_code == short_code))
 
-    async def get_owned(
-        self, short_code: str, owner_id: int, *, for_update: bool = False
-    ) -> URL | None:
-        """Return one NOT deleted URL of this owner, with owner and tags loaded.
+    async def get_visible(self, short_code: str, *, for_update: bool = False) -> URL | None:
+        """Return the NOT deleted URL with this code (anyone's), with owner and tags loaded.
+
+        It does not filter by owner on purpose: the service must tell "no such URL"
+        (404) apart from "not yours" (403). The service checks the owner.
 
         They are loaded now because async code cannot lazy-load them later.
-        Someone else's URL -> None.
 
         for_update=True adds SELECT ... FOR UPDATE OF urls: the URL row stays locked
         until the transaction ends, so a second update of the same URL waits here
@@ -191,11 +191,7 @@ class URLRepository:
         """
         statement = (
             select(URL)
-            .where(
-                URL.short_code == short_code,
-                URL.owner_id == owner_id,
-                URL.deleted_at.is_(None),
-            )
+            .where(URL.short_code == short_code, URL.deleted_at.is_(None))
             .options(*WITH_OWNER_AND_TAGS)
         )
         if for_update:
@@ -204,15 +200,36 @@ class URLRepository:
             statement = statement.with_for_update(of=URL)
         return await self._session.scalar(statement)
 
-    async def owned_url_id(self, short_code: str, owner_id: int) -> int | None:
-        """Just the id of one NOT deleted URL of this owner (nothing else is loaded)."""
+    async def owner_id_of(self, short_code: str) -> int | None:
+        """Return the owner's id of the NOT deleted URL with this code, or None.
+
+        Only one number, no lock: a URL never changes owner, so it is safe to read
+        it before taking the locks (user row first, then the URL row).
+        """
         return await self._session.scalar(
-            select(URL.id).where(
-                URL.short_code == short_code,
-                URL.owner_id == owner_id,
-                URL.deleted_at.is_(None),
-            )
+            select(URL.owner_id).where(URL.short_code == short_code, URL.deleted_at.is_(None))
         )
+
+    async def id_and_owner_id(self, short_code: str) -> tuple[int, int] | None:
+        """Return (id, owner_id) of the NOT deleted URL with this code, or None."""
+        row = (
+            await self._session.execute(
+                select(URL.id, URL.owner_id).where(
+                    URL.short_code == short_code, URL.deleted_at.is_(None)
+                )
+            )
+        ).first()
+        return (row.id, row.owner_id) if row else None
+
+    async def count_live(self, owner_id: int, now: datetime | None = None) -> int:
+        """Count the owner's LIVE URLs (switched on, not deleted, not expired), in SQL.
+
+        SELECT count(*) ... uses the owner index; no URL is loaded into Python.
+        """
+        statement = select(func.count()).where(
+            URL.owner_id == owner_id, URL.is_live(now or utc_now())
+        )
+        return await self._session.scalar(statement) or 0
 
     async def short_code_exists(self, short_code: str) -> bool:
         """Return True if any URL already uses this short code."""
