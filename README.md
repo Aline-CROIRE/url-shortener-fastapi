@@ -206,6 +206,8 @@ erDiagram
 | `POST` | `/api/v1/auth/register/` | Create an account | Anyone (10/hour per IP) |
 | `POST` | `/api/v1/auth/login/` | Log in, get an access + refresh token | Anyone (5/minute per IP) |
 | `POST` | `/api/v1/auth/refresh/` | Swap a refresh token for a new pair | Anyone with a refresh token |
+| `POST` | `/api/v1/auth/logout/` | End this device's session (send its refresh token) | Anyone with a refresh token |
+| `POST` | `/api/v1/auth/logout-all/` | End every session of the account at once | Logged in |
 | `GET` | `/api/v1/auth/me/` | The logged-in user | Logged in |
 | `POST` | `/api/v1/urls/` | Create a short URL | Logged in (30/minute per user) |
 | `GET` | `/api/v1/urls/` | List your URLs (pages, filters, sort) | Logged in: only your own |
@@ -250,7 +252,18 @@ curl http://localhost:8000/api/v1/urls/ -H "Authorization: Bearer <access_token>
 # 4. After 15 minutes (401): get a new pair with the refresh token
 curl -X POST http://localhost:8000/api/v1/auth/refresh/ \
   -H "Content-Type: application/json" -d '{"refresh_token": "<refresh_token>"}'
+
+# 5. Log out this device (no access token needed), or every device at once
+curl -X POST http://localhost:8000/api/v1/auth/logout/ \
+  -H "Content-Type: application/json" -d '{"refresh_token": "<refresh_token>"}'
+curl -X POST http://localhost:8000/api/v1/auth/logout-all/ -H "Authorization: Bearer <access_token>"
 ```
+
+**Logging out:** `/logout/` marks that refresh token as used (`204`, also when called
+again), so a copy that comes back later is caught as a reuse. The access token is not stored
+on the server, so the client forgets it and it runs out within 15 minutes. `/logout-all/`
+revokes every refresh token and sets `users.tokens_valid_after`, so every access token stops
+working at once, this one too.
 
 **In Swagger (`/docs`):** register, then click **Authorize**, type your **email in the
 `username` field** and your password (leave `client_id` and `client_secret` empty). Every
@@ -258,7 +271,7 @@ request then sends the token.
 
 | | Access token | Refresh token |
 |---|---|---|
-| Used for | every request (`Authorization: Bearer ...`) | only `POST /auth/refresh/` |
+| Used for | every request (`Authorization: Bearer ...`) | only `POST /auth/refresh/` and `/auth/logout/` |
 | Lives | 15 minutes | 7 days, and works **once** |
 | Contains | only `sub` (user id), `type`, `iat`, `exp`, `jti` | the same five claims |
 
@@ -384,6 +397,7 @@ sequenceDiagram
 | Rate-limit storage | **Redis** (in memory when no Redis is configured) | Goes beyond the brief (in memory, Redis in Module 8): with several workers, in-memory counts are per worker, so "5 per minute" would really be 5 x workers |
 | Extra limits | Per-account failed logins, register per IP, URL creation per user | Stop botnets, account spam and mass creation of spam links |
 | Token revocation | Refresh tokens work once; reuse revokes every token of the account | A stolen token stops working at once instead of after 7 days |
+| Logout | **Added back for tokens:** `/logout/` (one device, refresh token in the body) and `/logout-all/` (every device) | The Module 6 cookie logout was removed with the cookies. `/logout/` needs no access token (RFC 7009), so it still works after the access token expired |
 | Username | Optional at register, made from the email | The brief's model has no username; the existing table requires one |
 | Tier values | Lower-case `free`, `premium`, `admin` | Kept from the existing database type |
 
