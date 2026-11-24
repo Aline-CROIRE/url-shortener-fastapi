@@ -750,9 +750,13 @@ def test_the_real_app_without_test_overrides_asks_for_a_token(client: TestClient
 # ---------- the cookie sessions are gone; Swagger shows OAuth2 ----------
 
 
-def test_logout_no_longer_exists(db_client: TestClient) -> None:
-    # Stateless tokens cannot be "logged out" on the server; the client forgets them
-    assert db_client.post(f"{AUTH}/logout/").status_code in (404, 405)
+def test_logout_no_longer_uses_a_cookie(db_client: TestClient) -> None:
+    # The Module 6 cookie logout is gone: logout now needs the refresh token in the
+    # body (see test_logout.py); a session cookie alone means nothing
+    db_client.cookies.set("session", "anything")
+    response = db_client.post(f"{AUTH}/logout/")
+
+    assert response.status_code == 422
 
 
 def test_the_cookie_settings_are_gone() -> None:
@@ -768,10 +772,13 @@ def test_swagger_uses_the_oauth2_password_flow() -> None:
     assert [s["type"] for s in schemes.values()] == ["oauth2"]
     (scheme,) = schemes.values()
     assert scheme["flows"]["password"]["tokenUrl"] == "/api/v1/auth/login/"
-    assert "/api/v1/auth/logout/" not in schema["paths"]
-    assert {"/api/v1/auth/register/", "/api/v1/auth/login/", "/api/v1/auth/refresh/"} <= set(
-        schema["paths"]
-    )
+    assert {
+        "/api/v1/auth/register/",
+        "/api/v1/auth/login/",
+        "/api/v1/auth/refresh/",
+        "/api/v1/auth/logout/",
+        "/api/v1/auth/logout-all/",
+    } <= set(schema["paths"])
 
 
 def test_paths_without_the_trailing_slash_work(db_client: TestClient) -> None:
