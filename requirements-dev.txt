@@ -8,6 +8,10 @@ pluggy==1.6.0
 packaging==26.3
 Pygments==2.21.0
 
+# Property-based testing: random sequences of actions (tests/test_security_properties.py)
+hypothesis==6.170.17
+sortedcontainers==2.4.0
+
 # Test coverage: pytest --cov
 pytest-cov==7.1.0
 coverage==7.17.2
