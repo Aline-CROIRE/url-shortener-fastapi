@@ -231,6 +231,37 @@ class AuthService:
             raise InvalidTokenError()
         return await self.issue_tokens(claims.user_id)
 
+    async def logout(self, refresh_token: str) -> None:
+        """End ONE session: the session of this refresh token.
+
+        The token is marked USED, not deleted, so a copy that comes back later (a
+        thief) is still caught by reuse detection in refresh(). Ending a session
+        that is already ended (logged out, rotated, expired row, unknown jti)
+        changes nothing and is not an error: the goal "this token no longer works"
+        is already true. The device's access token is not stored anywhere, so it
+        just runs out (ACCESS_TOKEN_MINUTES) and the client forgets it.
+
+        Raises:
+            InvalidTokenError: The token is not a valid refresh token of ours (bad
+                signature, expired, access-type, garbage) (401).
+        """
+        claims = decode_token_claims(refresh_token, TokenType.REFRESH, self._settings)
+        async with self._session.begin():
+            # The same atomic UPDATE as refresh(): only an unused token of THIS user
+            await self._refresh_tokens.use(claims.jti, claims.user_id)
+
+    async def logout_everywhere(self, user_id: int) -> None:
+        """End EVERY session of the user: on all devices, at once.
+
+        Every refresh token is revoked, and tokens_valid_after makes every access
+        token issued before now (the one of this request too) stop working.
+        Logging in again afterwards works as usual.
+        """
+        async with self._session.begin():
+            await self._refresh_tokens.revoke_all(user_id)
+            await self._users.revoke_tokens(user_id, datetime.now(UTC))
+        security_logger.info("Logged out everywhere: user_id=%s", user_id)
+
     async def issue_tokens(self, user_id: int) -> TokenPair:
         """Create a fresh access + refresh token pair, and store the refresh token's id."""
         refresh = issue_refresh_token(user_id, self._settings)

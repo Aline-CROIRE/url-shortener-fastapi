@@ -116,6 +116,44 @@ async def refresh(payload: RefreshIn, service: AuthServiceDep, response: Respons
     return tokens
 
 
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT, include_in_schema=False)
+@router.post(
+    "/logout/",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Log out (this device)",
+    description=(
+        "Send the refresh token of this device: its session ends, and it can no "
+        "longer get new tokens. No access token is needed, so logging out also "
+        "works after the access token has expired. The access token is not stored "
+        "on the server: forget it on the client (it runs out within "
+        "ACCESS_TOKEN_MINUTES). Calling it again is fine (204)."
+    ),
+    responses={**UNAUTHORIZED, **VALIDATION_ERROR, **INTERNAL_ERROR},
+)
+async def logout(payload: RefreshIn, service: AuthServiceDep, response: Response) -> None:
+    """End the session of one refresh token."""
+    await service.logout(payload.refresh_token.get_secret_value())
+    no_store(response)
+
+
+@router.post("/logout-all", status_code=status.HTTP_204_NO_CONTENT, include_in_schema=False)
+@router.post(
+    "/logout-all/",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Log out everywhere",
+    description=(
+        "Ends EVERY session of your account at once: all refresh tokens are revoked "
+        "and every access token (this one too) stops working. Use it after a lost "
+        "phone or a leaked password. Log in again to get new tokens."
+    ),
+    responses={**UNAUTHORIZED, **INTERNAL_ERROR},
+)
+async def logout_all(user: CurrentUser, service: AuthServiceDep, response: Response) -> None:
+    """End every session of the current user."""
+    await service.logout_everywhere(user.id)
+    no_store(response)
+
+
 @router.get("/me", include_in_schema=False)
 @router.get(
     "/me/",
