@@ -29,7 +29,9 @@ MAX_DAYS = 365
         "Totals, unique visitors (estimated by IP), first/last click, and clicks per "
         "country, city, UTC day (last `days` days) and top referrers. "
         "All numbers are computed by PostgreSQL. **Premium and Admin only**, and only for "
-        "your own URLs (an Admin may see any)."
+        "your own URLs (an Admin may see any). "
+        "Locations: IP Geolocation by [DB-IP](https://db-ip.com) (CC BY 4.0); clicks from "
+        'private or unknown addresses count as "Unknown".'
     ),
     responses={**UNAUTHORIZED, **FORBIDDEN, **NOT_FOUND, **VALIDATION_ERROR, **INTERNAL_ERROR},
 )
