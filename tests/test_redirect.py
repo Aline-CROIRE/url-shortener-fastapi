@@ -1,4 +1,8 @@
-"""GET /{short_code}: redirect only live URLs and record each visit in ONE transaction."""
+"""GET /{short_code}: redirect only live URLs and hand each visit over to be counted.
+
+In these tests the click is saved at once, in the test transaction (InlineClickTracker
+in conftest.py); in production a Celery worker saves it (tests/test_click_task.py).
+"""
 
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -12,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import UrlGoneError
 from app.models import URL, Click, User
-from app.repositories import ClickRepository, URLRepository
+from app.repositories import URLRepository
 from app.services.redirect import RedirectService, VisitorInfo
 
 TARGET = "https://www.python.org/about/"
@@ -150,30 +154,10 @@ def test_just_expired_link_is_gone(db_client: TestClient, run_db: RunDb) -> None
     moment = datetime(2026, 11, 12, 12, 0, tzinfo=UTC)
     code = seed_url(run_db, expires_at=moment)
 
-    async def visit_at_that_moment(session: AsyncSession) -> str:
-        service = RedirectService(session, URLRepository(session), ClickRepository(session))
+    async def visit_at_that_moment(session: AsyncSession) -> Any:
+        service = RedirectService(session, URLRepository(session))
         return await service.visit(code, VisitorInfo(), now=moment)
 
     with pytest.raises(UrlGoneError, match="expired"):
         run_db(visit_at_that_moment)
     assert recorded(run_db, code) == (0, [])
-
-
-# ---------- one transaction: all or nothing ----------
-
-
-def test_failure_after_the_click_insert_leaves_nothing_half_saved(
-    db_client: TestClient, run_db: RunDb, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    code = seed_url(run_db)
-
-    async def broken_increment(self: URLRepository, url_id: int) -> None:
-        raise RuntimeError("database hiccup during UPDATE")
-
-    # Write 1 (INSERT click) succeeds, then write 2 (UPDATE count) fails
-    monkeypatch.setattr(URLRepository, "increment_click_count", broken_increment)
-
-    response = db_client.get(f"/{code}")
-
-    assert response.status_code == 500
-    assert recorded(run_db, code) == (0, [])  # the click INSERT was rolled back too

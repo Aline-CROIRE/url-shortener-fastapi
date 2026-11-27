@@ -8,14 +8,14 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from redis.exceptions import ConnectionError as RedisConnectionError
-from sqlalchemy.exc import IntegrityError
 
 from app.api.dependencies import get_redirect_cache
 from app.cache import CachedRedirect, NullRedirectCache, RedisRedirectCache
 from app.cache.redirect_cache import TOMBSTONE, TOMBSTONE_SECONDS
 from app.core.config import Settings
 from app.main import create_app
-from app.repositories import ClickRepository
+from app.repositories import URLRepository
+from app.services.clicks import ClickEvent
 
 API = "/api/v1/urls"
 TARGET = "https://www.python.org/"
@@ -80,7 +80,11 @@ def create(client: TestClient, **body: Any) -> str:
 
 
 def test_first_visit_fills_the_cache_second_visit_skips_the_select(
-    db_client: TestClient, owner_id: int, fake_redis: FakeRedis, query_counter: Callable
+    db_client: TestClient,
+    owner_id: int,
+    fake_redis: FakeRedis,
+    query_counter: Callable,
+    recorded_clicks: list[ClickEvent],
 ) -> None:
     code = create(db_client)
     assert key(code) not in fake_redis.data
@@ -96,9 +100,9 @@ def test_first_visit_fills_the_cache_second_visit_skips_the_select(
     assert response.status_code == 302
     assert response.headers["location"] == TARGET
 
-    assert miss.count == 3  # SELECT + INSERT click + UPDATE count
-    assert hit.count == 2, hit.statements  # no SELECT: the cache answered
-    assert db_client.get(f"{API}/{code}").json()["click_count"] == 2  # both visits recorded
+    assert miss.count == 1, miss.statements  # only the SELECT (the worker saves the click)
+    assert hit.count == 0, hit.statements  # no database at all: the cache answered
+    assert len(recorded_clicks) == 2  # both visits handed over to be counted
 
 
 def test_ttl_never_outlives_the_link(
@@ -175,30 +179,40 @@ def test_delete_invalidates(db_client: TestClient, owner_id: int, fake_redis: Fa
     assert response.json()["error"]["code"] == "url_deleted"
 
 
-def test_stale_entry_for_a_url_that_no_longer_exists_returns_404(
-    db_client: TestClient, owner_id: int, fake_redis: FakeRedis
+def test_entry_for_a_row_removed_outside_the_api_lives_until_its_ttl(
+    db_client: TestClient, owner_id: int, fake_redis: FakeRedis, recorded_clicks: list[ClickEvent]
 ) -> None:
-    # e.g. the owner was deleted: the row is gone but the cache still remembers it
+    # Known limit (Module 8): the API never removes URL rows (delete is soft), but a
+    # row removed by hand in the database stays cached until its TTL ends (max 15
+    # min). The hit needs no database, so nothing notices; the worker then drops
+    # the click (tests/test_click_task.py).
     fake_redis.data[key("ghost1")] = CachedRedirect(999_999, TARGET, None).to_json()
 
     response = db_client.get("/ghost1")
 
-    assert response.status_code == 404  # the click INSERT failed its foreign key -> DB path
-    assert fake_redis.data[key("ghost1")] == TOMBSTONE
+    assert response.status_code == 302
+    assert recorded_clicks[0].url_id == 999_999
 
 
-def test_other_database_errors_on_a_cache_hit_are_not_hidden(
-    db_client: TestClient, owner_id: int, fake_redis: FakeRedis, monkeypatch: pytest.MonkeyPatch
+def test_cache_hit_works_even_when_the_database_is_down(
+    db_client: TestClient,
+    owner_id: int,
+    fake_redis: FakeRedis,
+    recorded_clicks: list[ClickEvent],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     code = create(db_client)
     db_client.get(f"/{code}")  # cached
 
-    async def broken_add(self: ClickRepository, click: Any) -> Any:
-        raise IntegrityError("INSERT INTO clicks ...", {}, Exception("check constraint failed"))
+    async def database_down(*args: Any, **kwargs: Any) -> Any:
+        raise ConnectionRefusedError("PostgreSQL is down")
 
-    monkeypatch.setattr(ClickRepository, "add", broken_add)
+    monkeypatch.setattr(URLRepository, "get_by_short_code", database_down)
 
-    assert db_client.get(f"/{code}").status_code == 500
+    response = db_client.get(f"/{code}")
+
+    assert response.status_code == 302  # popular links keep working during a DB outage
+    assert len(recorded_clicks) == 2
 
 
 # ---------- fail open: Redis problems never break redirects ----------

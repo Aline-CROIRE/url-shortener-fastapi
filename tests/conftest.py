@@ -20,18 +20,24 @@ import pytest
 from alembic.config import Config
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, create_async_engine
+from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import NullPool
 
 from alembic import command
 from app.api.auth import get_current_user, get_session_factory
-from app.core.config import Settings, get_settings
+from app.api.dependencies import get_click_tracker
+from app.core.config import Settings, get_settings, to_sync_url
 from app.core.rate_limit import limiter
 from app.core.security import create_access_token
 from app.db.database import get_db, get_read_db
 from app.db.query_counter import QueryCounter, count_queries
 from app.main import create_app
 from app.models import User, UserTier
+from app.services.clicks import ClickEvent, click_statements
+from app.worker import tasks
+from app.worker.celery_app import celery_app
 
 TEST_BASE_URL = "http://short.test/"  # trailing slash on purpose: it must be removed
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -68,11 +74,83 @@ def test_settings() -> Settings:
     return settings
 
 
+class RecordingClickTracker:
+    """Tests only: remembers each click handed over by the redirect, writes nothing."""
+
+    def __init__(self) -> None:
+        self.events: list[ClickEvent] = []
+
+    async def track(self, event: ClickEvent) -> None:
+        self.events.append(event)
+
+
+class InlineClickTracker:
+    """Tests only: saves the click at once, with the SAME SQL statements as the Celery
+    task, inside the test transaction (a worker's own connection could not see it).
+    """
+
+    def __init__(self, session_factory: Callable[[], AsyncSession]) -> None:
+        self._session_factory = session_factory
+
+    async def track(self, event: ClickEvent) -> None:
+        async with self._session_factory() as session:
+            for statement in click_statements(event):
+                await session.execute(statement)
+            await session.commit()
+
+
 @pytest.fixture
 def app(test_settings: Settings) -> Iterator[FastAPI]:
     app = create_app(test_settings)
+    # Never send a test click to a real broker (a running worker would pick it up)
+    app.dependency_overrides[get_click_tracker] = RecordingClickTracker
     yield app
     app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def recorded_clicks(app: FastAPI) -> list[ClickEvent]:
+    """The clicks the redirect hands over, recorded instead of saved.
+
+    List it AFTER db_client in a test's arguments (the last override wins).
+    """
+    tracker = RecordingClickTracker()
+    app.dependency_overrides[get_click_tracker] = lambda: tracker
+    return tracker.events
+
+
+@pytest.fixture
+def worker_db(test_settings: Settings, monkeypatch: pytest.MonkeyPatch) -> Iterator[Session]:
+    """A SYNC session on the test database for the Celery task (psycopg, like the worker).
+
+    The task's own sessions join this connection's transaction (savepoints), and
+    everything is rolled back after the test. Use the yielded session to seed and check.
+    """
+    engine = create_engine(to_sync_url(test_settings.test_database_url), poolclass=NullPool)
+    connection = engine.connect()
+    transaction = connection.begin()
+    factory = sessionmaker(
+        bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False
+    )
+    monkeypatch.setattr(tasks, "get_session_factory", lambda: factory)
+    session = factory()
+    try:
+        yield session
+    finally:
+        session.close()
+        transaction.rollback()
+        connection.close()
+        engine.dispose()
+
+
+@pytest.fixture
+def celery_eager() -> Iterator[None]:
+    """Run tasks at once, in the calling thread, instead of sending them to a broker."""
+    celery_app.conf.task_always_eager = True
+    celery_app.conf.task_eager_propagates = True  # a failing task raises in the test
+    yield
+    celery_app.conf.task_always_eager = False
+    celery_app.conf.task_eager_propagates = False
 
 
 @pytest.fixture
@@ -125,6 +203,8 @@ def db_client(
     app.dependency_overrides[get_read_db] = override_get_db
     # The token check (whose token is this?) opens its own short session: same test transaction
     app.dependency_overrides[get_session_factory] = lambda: test_session
+    # Clicks are saved by a Celery worker in production; here, at once in the test transaction
+    app.dependency_overrides[get_click_tracker] = lambda: InlineClickTracker(test_session)
 
     with TestClient(app, follow_redirects=False, raise_server_exceptions=False) as test_client:
         # Inside TestClient's event loop: every request of this test uses this connection
