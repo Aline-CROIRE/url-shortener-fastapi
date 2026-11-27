@@ -85,6 +85,7 @@ Settings are read from environment variables (or `.env`); see [.env.example](.en
 | `REDIS_URL` | empty | Redis **DB 0**: the redirect cache and the rate limits. Empty = no cache |
 | `CACHE_TTL_SECONDS` | `900` | Longest time a redirect stays cached (never past the link's expiry) |
 | `CELERY_BROKER_URL` | `redis://127.0.0.1:6379/1` | Celery's job queue: Redis **DB 1**. Must differ from the cache's DB |
+| `GEOIP_DATABASE_PATH` | empty | MaxMind GeoLite2-City file: the worker saves each click's country and city. Empty = "Unknown". See [geoip/README.md](geoip/README.md) |
 | `LOG_FORMAT` | `json` | `json`: one JSON object per line; `text`: for reading by eye |
 | `WEB_CONCURRENCY` | 2 x CPU cores + 1 | Gunicorn worker processes |
 | `DB_POOL_SIZE` / `DB_MAX_OVERFLOW` | `3` / `2` | Database connections per web worker (kept open / extra when busy) |
@@ -482,6 +483,7 @@ with `logging.config.dictConfig`.
 | Retries with backoff + jitter, only for DB connection errors and deadlocks | Survives a database restart | A click may be saved up to ~2 min late |
 | Worker uses a **sync** SQLAlchemy engine (psycopg), statements shared with the API | Celery's normal style; pooled connections per worker process | The same SQL runs on two drivers |
 | Publishing fails fast (no retries, 1 s connect timeout) | A dead broker costs ~1 s in the background, not 6 s | One try per click |
+| **Geo-location in the worker** (`maxminddb` + GeoLite2-City, optional) | Analytics per country and city; the redirect never waits for the lookup | Needs a free MaxMind account and a weekly file update; without it, "Unknown" |
 | Nightly archive: **one bulk UPDATE ... RETURNING**, then clear cache keys | 1095 rows in 0.5 s (measured); a link the owner extends meanwhile is not archived | All matching rows locked for that moment |
 | Archived links still answer `410 url_expired` | The visitor sees the real reason | An owner must send `is_active: true` with a new expiry to revive one |
 | Cache DB 0, broker DB 1; production Redis `volatile-lru` | Clearing or evicting the cache never removes jobs | One server: one memory limit for both |

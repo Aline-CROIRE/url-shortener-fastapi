@@ -463,3 +463,51 @@ two queries at the same time.
 |---|---|---|
 | Optional `referrer` / `clicked_at` | The brief's call works; old messages in the queue still work | Two ways to call the task |
 | `asyncio.gather` for the checks | Probe time = slowest check, not the sum | Two database connections at once during a check (primary + replica) |
+
+## Phase 9 — Geo-location of clicks (in the worker)
+
+**Goal.** The brief's analytics promise "geo-location", but `clicks.country` and
+`clicks.city` were never filled (every click showed "Unknown"). Now the Celery worker
+looks the visitor's IP up in a MaxMind database while it saves the click. Like a post
+office reading the postcode on each letter in the back room: the customer at the counter
+(the visitor) never waits for it.
+
+**How**
+1. `GEOIP_DATABASE_PATH` points to a GeoLite2-City `.mmdb` file (free MaxMind account;
+   put it in `./geoip/`, mounted read-only into the worker; git-ignored).
+2. `get_geoip_reader()` opens it ONCE per worker process (memory-mapped, `lru_cache`),
+   on the first click, like the database engine. Missing or broken file = one warning,
+   then `None`.
+3. `locate(reader, ip)` returns `Location(country, city)`: ISO code ("GB") and the English
+   city name. Private or unknown IPs, a missing database, a failed lookup = `UNKNOWN`.
+   It never raises: a location is extra, the click itself must always be saved.
+4. `click_statements(event, country, city)` puts them in the same INSERT.
+
+**Seen live** (worker pointed at MaxMind's test database for the check):
+`81.2.69.142 -> GB London`, `89.160.20.112 -> SE Linköping`, `2001:218::1 -> JP (no city)`,
+`10.0.0.1 -> unknown`. A first attempt had a wrong path (Git Bash rewrote `/app/...`): the
+worker logged "GeoIP database not usable" and still saved every click, which shows the
+fallback working.
+
+**What changed**
+
+| File | Change |
+|---|---|
+| `app/worker/geoip.py` | New: `get_geoip_reader()`, `locate()`, `Location` |
+| `app/worker/tasks.py` | Looks the IP up before the INSERT |
+| `app/services/clicks.py` | `click_statements(event, country, city)` |
+| `app/core/config.py`, `.env.example` | `GEOIP_DATABASE_PATH` |
+| `requirements.txt` | `maxminddb` (no dependencies; not `geoip2`, which pulls in aiohttp and requests) |
+| `docker-compose*.yml`, `.gitignore`, `.dockerignore`, `geoip/README.md` | Read-only `./geoip` mount; the licensed file never goes into git or the image |
+| `tests/test_geoip.py`, `tests/data/` | MaxMind's public test database (MIT/Apache), 15 tests |
+
+**Tradeoffs**
+
+| Choice | Gain | Cost |
+|---|---|---|
+| Lookup in the worker, not the redirect | The visitor never waits | The location appears with the click, a moment later |
+| Local `.mmdb` file (not a web API) | Microseconds per lookup, no network, no per-request fee, IPs never leave our servers | A file to download and update weekly |
+| `maxminddb` instead of `geoip2` | No extra dependencies | We read the record's fields ourselves (a few lines) |
+| Never raise from `locate()` | A geo problem never costs a click | A broken setup only shows as warnings + "Unknown" |
+| Only the country code and city name are stored | Small rows; fits the columns | No region, latitude/longitude |
+| Location at click time is stored | History stays true when IP blocks move | Old clicks are not corrected by later database updates |
