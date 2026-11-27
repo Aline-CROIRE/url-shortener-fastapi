@@ -55,6 +55,30 @@ six==1.17.0
 tzlocal==5.4.5
 tzdata==2026.6 ; sys_platform == "win32"
 
+# Tracing: OpenTelemetry SDK, OTLP/HTTP exporter, and instrumentation for FastAPI,
+# SQLAlchemy, Redis and Celery (the instrumentation packages are versioned 0.x beta)
+opentelemetry-sdk==1.45.2
+opentelemetry-exporter-otlp-proto-http==1.45.2
+opentelemetry-exporter-otlp-proto-common==1.45.2
+opentelemetry-proto==1.45.2
+opentelemetry-semantic-conventions==0.66b2
+opentelemetry-instrumentation==0.66b2
+opentelemetry-instrumentation-asgi==0.66b2
+opentelemetry-instrumentation-fastapi==0.66b2
+opentelemetry-instrumentation-sqlalchemy==0.66b2
+opentelemetry-instrumentation-redis==0.66b2
+opentelemetry-instrumentation-celery==0.66b2
+opentelemetry-exporter-http-transport==0.66b2
+opentelemetry-exporter-otlp-common==0.66b2
+opentelemetry-util-http==0.66b2
+googleapis-common-protos==1.76.0
+protobuf==7.36.2
+asgiref==3.13.0
+requests==2.34.2
+urllib3==2.8.0
+charset-normalizer==3.5.3
+certifi==2026.10.23
+
 # Metrics: Prometheus client (GET /metrics), multiprocess mode under Gunicorn
 prometheus-client==0.26.0
 
