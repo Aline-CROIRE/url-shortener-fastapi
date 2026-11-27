@@ -55,7 +55,8 @@ no_implicit_optional = true
 strict_equality = true
 
 [[tool.mypy.overrides]]
-module = ["asyncpg.*"]
+# These packages ship no type hints: their objects are treated as "Any"
+module = ["asyncpg.*", "celery.*", "kombu.*"]
 ignore_missing_imports = true
 
 # ---------------------------------------------------------------- pytest

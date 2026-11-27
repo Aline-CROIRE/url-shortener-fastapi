@@ -36,13 +36,32 @@ Deprecated==3.0.1
 wrapt==2.5.2
 packaging==26.3
 
-# Cache: Redis (cache-aside for redirects)
+# Cache: Redis (cache-aside for redirects); also Celery's broker client
 redis==8.1.0
+
+# Background jobs: Celery with Redis as the broker (click tracking, nightly archive)
+celery[redis]==5.7.0
+kombu==5.7.0
+amqp==5.4.2
+billiard==4.3.2
+vine==5.1.0
+click-didyoumean==0.3.1
+click-plugins==1.1.1.2
+click-repl==0.4.1
+prompt_toolkit==3.0.53
+wcwidth==0.9.5
+python-dateutil==2.9.0.post0
+six==1.17.0
+tzlocal==5.4.5
+tzdata==2026.6 ; sys_platform == "win32"
 
 # Database: SQLAlchemy 2.0 ORM (async) + asyncpg PostgreSQL driver
 SQLAlchemy==2.0.57
 asyncpg==0.32.0
 greenlet==3.5.6
+# Synchronous PostgreSQL driver for the Celery worker (Celery tasks are not async)
+psycopg[binary]==3.3.9
+psycopg-binary==3.3.9
 
 # Database migrations (Mako + MarkupSafe are Alembic's template helpers)
 alembic==1.20.1
