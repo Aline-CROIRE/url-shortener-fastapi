@@ -254,3 +254,17 @@ def test_worker_engine_uses_psycopg_and_a_small_pool(monkeypatch: pytest.MonkeyP
     finally:
         worker_db_module.get_session_factory.cache_clear()
         get_settings.cache_clear()
+
+
+def test_the_briefs_exact_call_works(worker_db: Session, celery_eager: None) -> None:
+    url = seed_url(worker_db)
+
+    # Word for word from the Module 8 brief: track_click_task.delay(url_id, ip_address, user_agent)
+    track_click_task.delay(url.id, "203.0.113.9", "Mozilla/5.0")
+
+    click_count, [click] = saved(worker_db, url)
+    assert click_count == 1
+    assert str(click.ip_address) == "203.0.113.9"
+    assert click.user_agent == "Mozilla/5.0"
+    assert click.referrer is None  # not sent: "Direct" in the analytics
+    assert abs(click.clicked_at - datetime.now(UTC)) < timedelta(minutes=1)

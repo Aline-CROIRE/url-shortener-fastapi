@@ -136,3 +136,21 @@ def test_health_never_shows_error_details(
 def test_probes_are_never_cached(client: TestClient, cache: StubCache, path: str) -> None:
     # A proxy that cached "healthy" would hide an outage
     assert client.get(path).headers["cache-control"] == "no-store"
+
+
+def test_checks_run_at_the_same_time(
+    client: TestClient, cache: StubCache, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def slow_database(session: object) -> None:
+        await asyncio.sleep(0.5)
+
+    monkeypatch.setattr(health_routes, "ping_database", slow_database)
+    cache.delay = 0.5
+
+    start = time.perf_counter()
+    response = client.get("/health/ready")
+    elapsed = time.perf_counter() - start
+
+    assert response.status_code == 200
+    # asyncio.gather: both waits overlap (~0.5 s), instead of one after the other (~1 s)
+    assert elapsed < 0.9, f"checks ran one after the other: {elapsed:.2f} s"
