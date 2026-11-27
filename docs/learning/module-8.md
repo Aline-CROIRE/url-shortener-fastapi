@@ -209,3 +209,63 @@ and the owner's fresh extension would be switched off. A test proves both ways
 | Nightly at 02:00 UTC with `crontab` | Quiet hour; one run a day | A link can stay "on but expired" up to a day (visitors still get 410) |
 | Exactly one beat container | Each job queued once | If beat is down, the night's run is skipped (the next one catches up) |
 | Task safe to run twice | Retries and manual runs are harmless | — |
+
+## Phase 5 — Structured JSON logging
+
+**Goal.** Every log line becomes one JSON object with named fields, and every line
+written while a request runs carries that request's id. Like parcels in a sorting
+centre: a handwritten note ("something about a 401, around 9") is hard to sort; a
+label with fixed boxes (date, sender, tracking number) can be sorted by machine,
+and the tracking number links every scan of the same parcel.
+
+**One real line (seen live in Docker)**
+```json
+{"timestamp": "2026-11-27T09:07:56.782Z", "level": "WARNING", "logger": "app.security",
+ "message": "Failed login for n***@example.com from ip=172.20.0.1",
+ "request_id": "live-check-42", "path": "/api/v1/auth/login", "method": "POST"}
+```
+The access line of the same request adds `"status": 401, "duration_ms": 369.15`.
+
+**How the request id reaches a line written deep in a service**
+1. `RequestLoggingMiddleware` takes the caller's `X-Request-ID` (if plain) or makes one,
+   and calls `bind_request_context(id, method, path)`: three **ContextVars**.
+2. A ContextVar has one value per request (per asyncio task), so two requests at
+   the same moment never mix their ids.
+3. `RequestContextFilter` (on the handler) copies them onto every LogRecord.
+4. `JsonFormatter` writes the record as one JSON line; the stack trace (if any)
+   goes in `"exception"`. Both are passed through `redact()` first.
+
+**What changed**
+
+| File | Change |
+|---|---|
+| `app/core/logging.py` | ContextVars + `bind_request_context`, `RequestContextFilter`, `JsonFormatter`, `TextFormatter`, `redact()`, `logging_config()` for `dictConfig`, `setup_logging()` once per process |
+| `app/core/middleware.py` | Binds the request context; access line with `status` and `duration_ms` as fields |
+| `app/core/config.py`, `.env.example` | `LOG_FORMAT` = `json` (default) or `text` |
+| `app/main.py` | Passes `log_format` |
+| `app/worker/celery_app.py` | `setup_logging` signal: worker and beat log the same JSON |
+| `tests/test_json_logging.py` | Format, fields, request id on inner lines, 500 with stack trace, redaction, a full login session, dictConfig, Uvicorn/Gunicorn/Celery loggers |
+
+Already there from Module 7 (and still tested): failed logins (email masked, never
+the password), every 403, rate-limit hits, 500s with the stack trace (never sent to
+the client), log-injection cleaning of client text.
+
+**Never log secrets: three layers**
+1. Our code never passes a password or token to a logger (masked email, user id only).
+2. `redact()` replaces JWTs (`eyJ...`), `Bearer ...`, `password=...`, `refresh_token=...`
+   in every message and stack trace, as a safety net for library messages.
+3. A test runs a whole session (register, wrong password, login, /me, refresh,
+   logout) and checks the password, both tokens and the full email are nowhere in the output.
+
+**Tradeoffs**
+
+| Choice | Gain | Cost |
+|---|---|---|
+| JSON lines | Collectors filter by field (`status >= 500`, one `request_id`) | Harder to read by eye (`LOG_FORMAT=text` for that) |
+| Our own ~40-line formatter | No new library; every line explainable | We maintain it (python-json-logger would do the same) |
+| stdout only (no log files) | Docker/Kubernetes collect it; no disk filling up, no rotation | Without a collector, old logs are gone when the container is removed |
+| ContextVars for the request id | Every line of a request is linked, with no parameter passing | Lines from threads started by hand do not inherit them (asyncio tasks do) |
+| Redaction by patterns | Catches secrets in library messages too | Small cost per line; an unusual secret format could slip through |
+| `setup_logging` once per process | A second `create_app()` (tests, scripts) cannot remove handlers | The first call decides (tests force a re-setup when they test it) |
+| Uvicorn/Gunicorn access logs off | One access line per request, with our fields | Their own format is no longer available |
+| Celery uses the same setup | One format for API, worker and beat | Worker lines have no request id (a task is not a request) |
