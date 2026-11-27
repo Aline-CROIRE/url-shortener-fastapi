@@ -134,6 +134,21 @@ services:
       db:
         condition: service_healthy
 
+  # Optional load test (Locust), a one-off run:
+  #   SHORT_CODES=abc1234,xyz9876 docker compose --profile loadtest run --rm locust
+  # LOADTEST_HOST, USERS, SPAWN_RATE and DURATION change the target and the load
+  locust:
+    image: locustio/locust:2.43.1
+    profiles: ["loadtest"]
+    volumes:
+      - ./loadtest:/mnt/locust:ro
+    environment:
+      SHORT_CODES: ${SHORT_CODES:-}
+    command: >-
+      -f /mnt/locust/locustfile.py --host ${LOADTEST_HOST:-http://app:8000}
+      --headless --users ${USERS:-50} --spawn-rate ${SPAWN_RATE:-10}
+      --run-time ${DURATION:-30s} --only-summary
+
   # Optional tracing UI (not started by default):
   #   docker compose --profile tracing up -d jaeger      ->  http://localhost:16686
   #   and start app + worker with OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318
