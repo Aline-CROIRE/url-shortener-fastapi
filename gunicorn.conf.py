@@ -5,6 +5,14 @@ that crash or hang, and replaces them one by one on a deploy. Each worker runs
 Uvicorn, which speaks ASGI to FastAPI. More processes = more CPU cores used.
 """
 
+import os
+from pathlib import Path
+
+# Prometheus multiprocess mode: every worker writes its numbers to files in this
+# folder, and /metrics adds them up (app/core/metrics.py). Set HERE, in the master,
+# before any worker starts: prometheus_client reads it when it is first imported.
+PROMETHEUS_DIR = os.environ.setdefault("PROMETHEUS_MULTIPROC_DIR", "/tmp/prometheus-multiproc")
+
 from app.core.capacity import check_connection_budget, default_web_workers
 from app.core.config import get_settings
 from app.core.logging import logging_config
@@ -49,3 +57,21 @@ def when_ready(server: object) -> None:
         db_connections,
         settings.db_max_connections,
     )
+
+
+def on_starting(server: object) -> None:
+    """Start every count from zero: remove metric files of an earlier run (master, once)."""
+    folder = Path(PROMETHEUS_DIR)
+    folder.mkdir(parents=True, exist_ok=True)
+    for stale in folder.glob("*.db"):  # only prometheus_client's files, nothing else
+        stale.unlink()
+
+
+def child_exit(server: object, worker: object) -> None:
+    """Drop a stopped worker's "live" values (e.g. its requests in progress).
+
+    Its counters stay: what it counted still happened.
+    """
+    from prometheus_client import multiprocess
+
+    multiprocess.mark_process_dead(worker.pid, PROMETHEUS_DIR)  # type: ignore[attr-defined]
