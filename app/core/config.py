@@ -108,6 +108,8 @@ class Settings(BaseSettings):
     # reading the metrics files). Threads mostly WAIT (network, disk), so 40 is cheap.
     # Password hashing has its own small pool (app/services/password_work.py).
     thread_pool_size: int = Field(default=40, ge=1)
+    # Port of the Celery worker's own Prometheus metrics (served by its main process)
+    worker_metrics_port: int = Field(default=9808, ge=1, le=65535)
     # Celery worker processes (the --concurrency of the celery-worker container)
     celery_concurrency: int = Field(default=2, ge=1)
 

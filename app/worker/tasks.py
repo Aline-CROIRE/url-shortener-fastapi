@@ -12,6 +12,7 @@ from app.worker.cache import clear_cached_redirects, get_redis
 from app.worker.celery_app import celery_app
 from app.worker.db import get_session_factory
 from app.worker.geoip import get_geoip_reader, locate
+from app.worker.metrics import CLICKS_SAVED, URLS_ARCHIVED
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,9 @@ def track_click_task(
             raise
         # The URL row is gone (removed outside the API): retrying cannot help
         logger.warning("Click for url_id=%s dropped: the URL no longer exists", event.url_id)
+        CLICKS_SAVED.labels(outcome="dropped").inc()
         return False
+    CLICKS_SAVED.labels(outcome="saved").inc()
     return True
 
 
@@ -86,5 +89,6 @@ def archive_expired_urls_task() -> int:
         short_codes = list(session.scalars(URLRepository.archive_expired_statement(now)))
     # AFTER the commit: their cached redirects must go (they are no longer live)
     clear_cached_redirects(get_redis(), short_codes)
+    URLS_ARCHIVED.inc(len(short_codes))
     logger.info("Archived %d expired URLs", len(short_codes))
     return len(short_codes)
