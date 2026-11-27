@@ -4,10 +4,14 @@ Start the worker:  celery -A app.worker.celery_app:celery_app worker --loglevel=
 Start beat:        celery -A app.worker.celery_app:celery_app beat --loglevel=INFO
 """
 
+from typing import Any
+
 from celery import Celery
 from celery.schedules import crontab
+from celery.signals import setup_logging as celery_setup_logging
 
 from app.core.config import get_settings
+from app.core.logging import setup_logging
 
 
 def create_celery_app(broker_url: str) -> Celery:
@@ -44,6 +48,16 @@ def create_celery_app(broker_url: str) -> Celery:
         },
     )
     return celery
+
+
+@celery_setup_logging.connect
+def use_app_logging(**kwargs: Any) -> None:
+    """Give the worker and beat the app's JSON logging (same fields, same redaction).
+
+    Connecting to this signal tells Celery not to set up its own log format.
+    """
+    settings = get_settings()
+    setup_logging(settings.debug, settings.log_format, force=True)
 
 
 celery_app = create_celery_app(get_settings().celery_broker_url)

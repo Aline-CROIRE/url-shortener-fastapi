@@ -43,7 +43,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             environment and the .env file.
     """
     settings = settings or get_settings()
-    setup_logging(settings.debug)
+    setup_logging(settings.debug, settings.log_format)  # once per process (see setup_logging)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:

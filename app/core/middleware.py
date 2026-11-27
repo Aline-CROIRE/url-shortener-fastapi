@@ -11,7 +11,7 @@ from starlette.datastructures import Headers, MutableHeaders
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from app.core.logging import clean_for_log
+from app.core.logging import bind_request_context, clean_for_log
 
 logger = logging.getLogger("app.requests")
 
@@ -35,6 +35,8 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         request_id = incoming_id if is_plain else uuid.uuid4().hex
         # request.state = data that belongs to THIS request only
         request.state.request_id = request_id
+        # From here on, EVERY log line of this request carries its id, method and path
+        bind_request_context(request_id, request.method, request.url.path)
 
         start = time.perf_counter()
         try:
@@ -50,15 +52,15 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 
     @staticmethod
     def _log(request: Request, status_code: int, start: float, request_id: str) -> None:
-        duration_ms = (time.perf_counter() - start) * 1000
+        duration_ms = round((time.perf_counter() - start) * 1000, 2)
         logger.info(
-            "%s %s %s %.2fms request_id=%s",
+            "%s %s %s",
             request.method,
             # The path is the client's text: clean it, or escape codes reach the log
             clean_for_log(request.url.path, MAX_LOGGED_PATH),
             status_code,
-            duration_ms,
-            request_id,
+            # Separate JSON fields, so "status >= 500" or "duration_ms > 500" is a filter
+            extra={"status": status_code, "duration_ms": duration_ms, "request_id": request_id},
         )
 
 

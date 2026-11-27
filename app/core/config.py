@@ -54,6 +54,8 @@ class Settings(BaseSettings):
     app_version: str = "0.1.0"
     environment: Literal["development", "production", "testing"] = "development"
     debug: bool = False
+    # "json": one JSON object per line (production, log collectors); "text": for reading by eye
+    log_format: Literal["json", "text"] = "json"
     base_url: str = "http://localhost:8000"
     # Other host names this shortener answers on (BASE_URL's host is always included).
     # Short links may never point to them: the link would redirect to itself. A
