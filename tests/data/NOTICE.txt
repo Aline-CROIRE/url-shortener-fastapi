@@ -1,0 +1,4 @@
+GeoIP2-City-Test.mmdb is MaxMind's public TEST database (made-up sample data, not real
+locations), from https://github.com/maxmind/MaxMind-DB (test-data/GeoIP2-City-Test.mmdb).
+Copyright (c) 2013 - 2026 MaxMind, Inc. Licensed under the Apache License 2.0 or the MIT
+License, at your option. Used only by tests/test_geoip.py.

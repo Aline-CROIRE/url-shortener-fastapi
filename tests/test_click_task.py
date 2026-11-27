@@ -152,8 +152,8 @@ def test_database_hiccup_is_retried_and_counted_once(
     real_statements = clicks_module.click_statements
     failures = iter([True, True])  # the first two tries fail, the third works
 
-    def flaky_statements(event: ClickEvent) -> Any:
-        insert, update = real_statements(event)
+    def flaky_statements(event: ClickEvent, *location: Any) -> Any:
+        insert, update = real_statements(event, *location)
         if next(failures, False):
             # Fails AFTER the INSERT ran: the whole try must be rolled back
             return insert, _raise_operational_error()
@@ -174,7 +174,7 @@ def test_task_gives_up_after_max_retries(
     url = seed_url(worker_db)
     tries = []
 
-    def always_failing(event: ClickEvent) -> Any:
+    def always_failing(event: ClickEvent, *location: Any) -> Any:
         tries.append(1)
         raise OperationalError("UPDATE urls ...", {}, Exception("server closed the connection"))
 
@@ -191,7 +191,7 @@ def test_other_errors_are_not_retried(worker_db: Session, monkeypatch: pytest.Mo
     url = seed_url(worker_db)
     tries = []
 
-    def bug(event: ClickEvent) -> Any:
+    def bug(event: ClickEvent, *location: Any) -> Any:
         tries.append(1)
         raise ValueError("a bug, not a hiccup")
 
@@ -229,7 +229,7 @@ def test_other_integrity_errors_are_not_hidden(
 ) -> None:
     url = seed_url(worker_db)
 
-    def breaks_a_check(event: ClickEvent) -> Any:
+    def breaks_a_check(event: ClickEvent, *location: Any) -> Any:
         # click_count >= 0 is a CHECK constraint: a bug, not a missing URL
         return (text(f"UPDATE urls SET click_count = -1 WHERE id = {event.url_id}"),)
 
