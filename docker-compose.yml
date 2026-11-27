@@ -1,5 +1,18 @@
-# Local DEVELOPMENT: app with hot reload + PostgreSQL + Redis (cache)
+# Local DEVELOPMENT: app with hot reload + PostgreSQL + Redis + Celery worker and beat
 # Run: docker compose up --build
+
+# Settings shared by the app and the Celery containers (YAML anchor, reused with "<<:")
+x-app-environment: &app-environment
+  ENVIRONMENT: development
+  DEBUG: "true"
+  DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/url_shortener # "db" = service below
+  # One Redis server, two DB numbers: 0 = cache, 1 = Celery's job queue
+  REDIS_URL: redis://redis:6379/0 # "redis" = the service name below
+  CELERY_BROKER_URL: redis://redis:6379/1
+  BASE_URL: http://localhost:8000
+  # Your JWT_SECRET_KEY from .env; this dev-only fallback lets a fresh clone start
+  JWT_SECRET_KEY: ${JWT_SECRET_KEY:-dev-only-jwt-secret-key-for-docker-compose}
+
 services:
   app:
     build: .
@@ -12,15 +25,9 @@ services:
         required: false # works on a fresh clone without a .env file
     environment:
       # These win over values from .env
-      ENVIRONMENT: development
-      DEBUG: "true"
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/url_shortener # "db" = service below
-      REDIS_URL: redis://redis:6379/0 # "redis" = the service name below
+      <<: *app-environment
       # Reads go to the replica when set (start it with: --profile replica). Empty = primary.
       DATABASE_REPLICA_URL: ${DATABASE_REPLICA_URL:-}
-      BASE_URL: http://localhost:8000
-      # Your JWT_SECRET_KEY from .env; this dev-only fallback lets a fresh clone start
-      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-dev-only-jwt-secret-key-for-docker-compose}
       # Windows/macOS do not send file-change events into containers; poll instead
       WATCHFILES_FORCE_POLLING: "true"
     volumes:
@@ -30,6 +37,58 @@ services:
         condition: service_completed_successfully # start only after the schema is up to date
       redis:
         condition: service_healthy # the app also works without it, but start it first
+
+  # Runs the background jobs (click tracking, nightly archive) taken from the queue.
+  # Same image as the app: the tasks use the app's code and settings.
+  # No hot reload: after changing a task, run "docker compose restart celery-worker".
+  celery-worker:
+    build: .
+    command: celery -A app.worker.celery_app:celery_app worker --loglevel=INFO --concurrency=2
+    env_file:
+      - path: .env
+        required: false # same settings as the app (environment below wins)
+    environment:
+      <<: *app-environment
+    volumes:
+      - ./app:/app/app
+    healthcheck:
+      # "Are you alive?" sent through the broker; only this container's worker answers
+      test: ["CMD-SHELL", "celery -A app.worker.celery_app:celery_app inspect ping -d celery@$$HOSTNAME --timeout 5"]
+      interval: 30s
+      timeout: 10s
+      start_period: 20s
+      retries: 3
+    depends_on:
+      migrate:
+        condition: service_completed_successfully # it writes clicks: the tables must exist
+      redis:
+        condition: service_healthy # the broker must accept connections
+
+  # The clock: puts scheduled jobs (the nightly archive) on the queue. Runs ONCE only:
+  # two beat containers would send every scheduled job twice.
+  celery-beat:
+    build: .
+    # /tmp: the image's non-root user cannot write into /app
+    command: >-
+      celery -A app.worker.celery_app:celery_app beat --loglevel=INFO
+      --schedule=/tmp/celerybeat-schedule --pidfile=/tmp/celerybeat.pid
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *app-environment
+    volumes:
+      - ./app:/app/app
+    healthcheck:
+      # Healthy while the process named in the pid file is running
+      test: ["CMD", "python", "-c", "import os; os.kill(int(open('/tmp/celerybeat.pid').read()), 0)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    depends_on:
+      redis:
+        condition: service_healthy
 
   # One-off job: brings the database to the newest migration, then exits.
   # Runs once, before the app, so app workers never race to migrate.
@@ -79,7 +138,8 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
-    # A cache, not a database: no volume. Losing it only means a few cache misses.
+    # No volume in development: losing it means a few cache misses and the
+    # clicks still waiting in the queue
 
   db:
     image: postgres:17-alpine

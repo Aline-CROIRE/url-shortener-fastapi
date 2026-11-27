@@ -1,25 +1,70 @@
 # PRODUCTION-like run: the image's default CMD (Gunicorn + Uvicorn workers), no code mount
 # Run: set POSTGRES_PASSWORD first (e.g. in a .env file), then
 #      docker compose -f docker-compose.prod.yml up --build
+
+# Settings shared by the app and the Celery containers (YAML anchor, reused with "<<:")
+x-app-environment: &app-environment
+  ENVIRONMENT: production
+  DEBUG: "false"
+  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-url_shortener}
+  # One Redis server, two DB numbers: 0 = cache, 1 = Celery's job queue
+  REDIS_URL: redis://redis:6379/0
+  CELERY_BROKER_URL: redis://redis:6379/1
+  BASE_URL: ${BASE_URL:-http://localhost:8000}
+  JWT_SECRET_KEY: ${JWT_SECRET_KEY:?set JWT_SECRET_KEY (32+ random characters)}  # signs tokens
+
 services:
   app:
     build: .
     ports:
       - "8000:8000"
     environment:
-      ENVIRONMENT: production
-      DEBUG: "false"
+      <<: *app-environment
       WORKERS: ${WORKERS:-4}
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-url_shortener}
-      REDIS_URL: redis://redis:6379/0
-      BASE_URL: ${BASE_URL:-http://localhost:8000}
-      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?set JWT_SECRET_KEY (32+ random characters)}  # signs tokens
       # Behind a reverse proxy: its IP, so Gunicorn trusts X-Forwarded-For from it
       # (and ONLY from it) and the rate limits count real client addresses
       FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
     depends_on:
       migrate:
         condition: service_completed_successfully # never start on an outdated schema
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Runs the background jobs taken from the queue (same image as the app)
+  celery-worker:
+    build: .
+    command: celery -A app.worker.celery_app:celery_app worker --loglevel=INFO --concurrency=${CELERY_CONCURRENCY:-2}
+    environment:
+      <<: *app-environment
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.worker.celery_app:celery_app inspect ping -d celery@$$HOSTNAME --timeout 5"]
+      interval: 30s
+      timeout: 10s
+      start_period: 20s
+      retries: 3
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # The clock for scheduled jobs. Exactly ONE: two would send every job twice.
+  celery-beat:
+    build: .
+    command: >-
+      celery -A app.worker.celery_app:celery_app beat --loglevel=INFO
+      --schedule=/tmp/celerybeat-schedule --pidfile=/tmp/celerybeat.pid
+    environment:
+      <<: *app-environment
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; os.kill(int(open('/tmp/celerybeat.pid').read()), 0)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    depends_on:
       redis:
         condition: service_healthy
     restart: unless-stopped
@@ -40,8 +85,10 @@ services:
 
   redis:
     image: redis:8-alpine
-    # Cache only: cap the memory and evict the least recently used keys when full
-    command: ["redis-server", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
+    # Cache AND job queue. Cap the memory; when full, evict only keys that have a
+    # TTL (cache entries). The policy is per SERVER, so allkeys-lru could also
+    # evict queued jobs (they have no TTL).
+    command: ["redis-server", "--maxmemory", "128mb", "--maxmemory-policy", "volatile-lru"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
