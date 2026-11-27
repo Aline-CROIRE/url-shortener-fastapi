@@ -21,7 +21,7 @@ from collections.abc import Awaitable
 from typing import Any
 
 from fastapi import APIRouter, Response, status
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import DbSession, ReadDbSession, RedirectCacheDep, SettingsDep
@@ -92,9 +92,20 @@ SCHEMA_STATUS_DOWN = "down"
 
 
 async def schema_status(db: AsyncSession) -> str:
-    """Return "current", "outdated" (migrations not applied yet) or "down"."""
+    """Return the database schema's state for the startup probe.
+
+    "current"  - at the newest migration: this code can run on it
+    "outdated" - an older migration: the migration Job has not run yet
+    "missing"  - the database answers but was never migrated (no alembic_version
+                 table: e.g. a new, empty database); run the migrations
+    "down"     - the database does not answer (network, credentials, timeout)
+    """
     try:
         revision = await within_timeout(current_schema_revision(db))
+    except ProgrammingError:
+        # The server answered the query: it is reachable, the table is not there
+        logger.warning("Startup check: database has no migrations (run alembic upgrade head)")
+        return "missing"
     except CHECK_ERRORS:
         logger.warning("Startup check: database not reachable", exc_info=True)
         return SCHEMA_STATUS_DOWN
