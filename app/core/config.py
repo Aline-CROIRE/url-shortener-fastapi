@@ -5,13 +5,22 @@ from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 
 from limits import parse as parse_rate_limit
-from pydantic import Field, SecretStr, ValidationInfo, field_validator
+from pydantic import Field, SecretStr, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+from sqlalchemy.engine import make_url
 
 # 32 random characters: far too many combinations to guess the key offline
 MIN_SECRET_KEY_LENGTH = 32
-# Storages the rate limits can use (rediss = Redis over TLS)
-RATE_LIMIT_STORAGE_SCHEMES = ("memory://", "redis://", "rediss://")
+# Redis address schemes (rediss = Redis over TLS)
+REDIS_SCHEMES = ("redis://", "rediss://")
+# Storages the rate limits can use
+RATE_LIMIT_STORAGE_SCHEMES = ("memory://", *REDIS_SCHEMES)
+
+
+def redis_target(url: str) -> tuple[str, int, str]:
+    """Return (host, port, DB number) of a Redis URL; no number means DB "0"."""
+    parts = urlsplit(url)
+    return (parts.hostname or "", parts.port or 6379, parts.path.strip("/") or "0")
 
 
 def normalize_host(host: str) -> str:
@@ -59,6 +68,9 @@ class Settings(BaseSettings):
     redis_url: str = ""
     # How long a redirect stays cached at most (15 minutes)
     cache_ttl_seconds: int = Field(default=900, ge=1)
+    # Celery's job queue (the "broker"). Another Redis DB number than the cache
+    # (/1, cache /0): clearing the cache can never delete queued jobs.
+    celery_broker_url: str = "redis://127.0.0.1:6379/1"
     # Number of Gunicorn worker processes in production (see gunicorn.conf.py)
     workers: int = Field(default=2, ge=1)
 
@@ -146,6 +158,38 @@ class Settings(BaseSettings):
                 f"rediss://..., not {value!r}"
             )
         return value
+
+    @field_validator("celery_broker_url")
+    @classmethod
+    def check_broker_url(cls, value: str) -> str:
+        """Refuse a broker that is not Redis (a typo must stop the app and the worker).
+
+        Raises:
+            ValueError: If it does not start with redis:// or rediss://.
+        """
+        if not value.startswith(REDIS_SCHEMES):
+            raise ValueError(f"CELERY_BROKER_URL must start with redis:// or rediss://: {value!r}")
+        return value
+
+    @model_validator(mode="after")
+    def check_cache_and_broker_use_different_dbs(self) -> "Settings":
+        """Refuse a broker in the same Redis DB as the cache.
+
+        Raises:
+            ValueError: If both point to the same server and DB number.
+        """
+        if self.redis_url and redis_target(self.redis_url) == redis_target(self.celery_broker_url):
+            raise ValueError(
+                "REDIS_URL and CELERY_BROKER_URL must use a different Redis DB "
+                "(e.g. .../0 for the cache, .../1 for the broker)"
+            )
+        return self
+
+    @property
+    def sync_database_url(self) -> str:
+        """Return DATABASE_URL with the synchronous psycopg driver (for the Celery worker)."""
+        url = make_url(self.database_url).set(drivername="postgresql+psycopg")
+        return url.render_as_string(hide_password=False)
 
     @property
     def rate_limit_storage(self) -> str:
