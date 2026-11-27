@@ -98,6 +98,7 @@ Settings are read from environment variables (or `.env`); see [.env.example](.en
 | `DB_POOL_SIZE` / `DB_MAX_OVERFLOW` | `3` / `2` | Database connections per web worker (kept open / extra when busy) |
 | `DB_POOL_TIMEOUT` | `10` | Seconds a request waits for a free connection |
 | `DB_MAX_CONNECTIONS` | `100` | PostgreSQL's `max_connections`: Gunicorn refuses to start if the workers could need more |
+| `THREAD_POOL_SIZE` | `40` | Threads per web worker for blocking calls (`.delay()`, metrics files). Password hashing has its own pool of 4 |
 | `CELERY_CONCURRENCY` | `2` | Celery worker processes (counted in the connection math) |
 | `BASE_URL` / `OWN_HOSTS` | `http://localhost:8000` / empty | This shortener's own host names: short links may not point to them |
 | `FORWARDED_ALLOW_IPS` | `127.0.0.1` | Behind a reverse proxy: the proxy's IP, so the real client IP is used |
@@ -341,6 +342,21 @@ as Jaeger showed it:
 
 `/health*` and `/metrics` are not traced; SQL spans hold placeholders, never values.
 
+### Profiling and load testing
+
+```bash
+# latency p50/p95/p99 (cache hit vs miss), CPU (cProfile) and memory (tracemalloc)
+python -m app.scripts.profile_redirects --requests 300 --report docs/learning/module-8-profile.md
+# load test with Locust (from its Docker image): 50 users for 30 s
+SHORT_CODES=abc1234,xyz9876 docker compose --profile loadtest run --rm locust
+```
+
+Latest results in [docs/learning/module-8-profile.md](docs/learning/module-8-profile.md):
+a cache hit takes 5.2 ms (p50) vs 14.0 ms for a miss; no memory leak; under load (3
+Gunicorn workers) 131 requests/s, p95 190 ms, 0 errors. The load test led to two fixes:
+rarer worker recycling (`max_requests` 10,000: recycling caused connection resets and the
+slow tail) and Gunicorn's unused control socket switched off.
+
 ## Authentication
 
 ```bash
@@ -536,6 +552,7 @@ with `logging.config.dictConfig`.
 | **JSON logs** (own formatter), request id on every line via ContextVars, secrets redacted | Logs can be filtered by field; one request's lines are linked | Harder to read by eye (`LOG_FORMAT=text`) |
 | **Liveness** (`/health/live`) vs **readiness** (`/health`, `/health/ready`) | A database outage never causes a restart storm | Two probes to configure |
 | Redis down -> **not ready (503)** | No traffic while clicks would be lost | A strict load balancer also stops redirects that would work |
+| Worker recycling rare (`max_requests` 10,000), measured: no leak; Gunicorn `threads` unused (Uvicorn workers), AnyIO pool `THREAD_POOL_SIZE` | Load test: 0 errors instead of 8 resets, p99 290 ms instead of 710 ms | A real leak would grow longer before a restart |
 | Gunicorn workers `2 x CPU + 1` (`WEB_CONCURRENCY`), small pool per worker, **start refused** if `workers x (pool + overflow) + Celery` does not fit in `max_connections` | A wrong setting fails at deploy, never at peak traffic | `DB_MAX_CONNECTIONS` must match the server |
 
 ## Known limits
@@ -557,6 +574,9 @@ with `logging.config.dictConfig`.
   remove that.
 - **A URL row removed by hand in the database** (the API only soft-deletes) keeps
   redirecting from the cache until its TTL ends (at most 15 minutes).
+- **Running the app outside Docker on Windows:** use `127.0.0.1`, not `localhost`, in
+  `REDIS_URL`. `localhost` tries IPv6 first, Docker only listens on IPv4, and every cache
+  call then waits for its 0.5 s timeout (the cache looks down).
 - **One beat container only:** if it is down at 02:00, that night's archive is skipped; the
   next run catches up (visitors get `410` for expired links either way).
 
@@ -602,7 +622,8 @@ app/
 ├── worker/         # Celery app, tasks, beat schedule, click tracker, GeoIP
 └── scripts/        # seed data
 alembic/            # database migrations
-docs/learning/      # Module 8 notes and tradeoffs, phase by phase
+docs/learning/      # Module 8 notes, tradeoffs, profiling and load test results
+loadtest/           # Locust load test (runs in Locust's Docker image)
 gunicorn.conf.py    # production server: workers, timeouts, connection budget
 tests/
 ```

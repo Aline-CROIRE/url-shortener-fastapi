@@ -629,3 +629,66 @@ connection), its SQL only 16 ms.
 | `ParentBased` ratio sampling (prod 10%) | Cheap under heavy load; a kept trace is never cut in half | 90% of requests have no trace (logs and metrics still see them) |
 | Route template as span name, SQL placeholders only | No codes or values leak; bounded names | The real path is still in span attributes (traces are access-controlled) |
 | Trace id in the log lines | Jump from a log line to the trace and back | Two more fields on traced lines |
+
+## Phase 12 — Profiling, load testing and thread allocation
+
+**Goal.** Measure instead of guessing: where does a redirect spend its time (latency),
+which functions use the CPU, does memory grow (a leak), and how does the server behave
+with 50 people at once. Like a doctor's check-up: the pulse at rest (profile), then the
+stress test on the treadmill (load test). Results: `docs/learning/module-8-profile.md`.
+
+**Tools**
+
+| Question | Tool | What it shows |
+|---|---|---|
+| How long do requests take? | `time.perf_counter()` + percentiles | p50 = typical, p95/p99 = the slow tail real users feel |
+| Where does the CPU go? | `cProfile` (`tottime` = own time) | Functions that WORK; waiting for the network is not CPU |
+| Does memory grow? | `tracemalloc` snapshots compared | Allocations per source line; growth per request |
+| How does it hold under load? | Locust (50 users, Docker) | Requests/s, percentiles and errors per kind of request |
+
+**What the measurements taught (and what changed because of them)**
+1. A cache hit is ~2.7x faster than a miss (5.2 vs 14.0 ms p50).
+2. The profiler itself was wrong at first: `app.dependency_overrides` makes FastAPI
+   re-inspect the override on every request. Fixed by swapping `app.state.click_tracker`.
+3. The profiler could silently measure nonsense: Redis unreachable (both rows = timeouts) or
+   a tombstone from a previous run (the "hit" row = misses). It now refuses both, clearly.
+4. `localhost` on Windows = IPv6 first = a 0.5 s Redis timeout on every call: use 127.0.0.1.
+5. No memory leak (3x the requests, +27% memory: caches filling up).
+6. Load test: worker recycling every 1000 requests caused 8 connection resets and the slow
+   tail. With no leak, recycling became rare (10,000): 0 errors, p99 710 -> 290 ms.
+7. Gunicorn 26's control socket failed on every worker start (no home folder for the app
+   user); not used, so switched off.
+
+**Thread allocation**
+
+| Pool | Size | Runs |
+|---|---|---|
+| Event loop (1 per worker) | - | All async work: thousands of waiting requests at once |
+| AnyIO default pool | `THREAD_POOL_SIZE` = 40 | Blocking I/O: `.delay()`, metrics files. Threads mostly wait |
+| Password pool (Module 7) | 4 | Argon2: CPU + 64 MB each, so few at a time |
+| Gunicorn `threads` | not used | Only for sync/gthread workers; a UvicornWorker ignores it |
+
+When a pool is full, new blocking work WAITS (a test shows 4 jobs on 2 threads = two
+rounds). That is why publishing to the broker fails fast: a hanging broker must not hold
+all 40 threads.
+
+**What changed**
+
+| File | Change |
+|---|---|
+| `app/scripts/profile_redirects.py` | New: latency percentiles, cProfile, tracemalloc; refuses an unreachable Redis or an unfilled cache; restores log levels |
+| `loadtest/locustfile.py`, `docker-compose.yml` | Locust scenarios (hit / miss / readiness) run from Locust's Docker image (profile `loadtest`) |
+| `gunicorn.conf.py` | `max_requests` 10,000 + 1,000 jitter; control socket off; why no `threads` |
+| `app/core/config.py`, `app/main.py`, `.env.example` | `THREAD_POOL_SIZE` set in the lifespan; `localhost` warning |
+| `pyproject.toml` | `loadtest/` excluded from ruff (Locust is not installed locally) |
+| tests | `test_profiling.py` (18), Gunicorn recycling / control socket / no threads |
+
+**Tradeoffs**
+
+| Choice | Gain | Cost |
+|---|---|---|
+| Profile in process (no network) | Shows our code's cost, repeatable | Real users also pay network and proxy time |
+| Three separate passes | Profilers do not distort the latency numbers | Takes three times as long |
+| Locust from Docker | No gevent/Flask in our dependencies | Docker needed to run it |
+| Rare worker recycling | No resets or cold workers under load | A real leak would grow longer before a restart |
+| `THREAD_POOL_SIZE` 40 | Many blocking waits at once, cheap | Too high could hide a slow dependency; too low queues work |
