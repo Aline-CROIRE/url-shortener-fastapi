@@ -23,6 +23,8 @@ from typing import Protocol
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
 
+from app.core.metrics import CACHE_LOOKUPS
+
 logger = logging.getLogger(__name__)
 
 # "<what>:<for which use>:<which one>" -> url:redirect:abc1234. Easy to find with
@@ -146,15 +148,19 @@ class RedisRedirectCache:
             logger.warning(
                 "Redis unavailable: reading %s from the database", short_code, exc_info=True
             )
+            CACHE_LOOKUPS.labels("error").inc()
             return None
         if raw is None:
+            CACHE_LOOKUPS.labels("miss").inc()
             return None  # miss
         text = raw if isinstance(raw, str) else raw.decode()
         if text == TOMBSTONE:
+            CACHE_LOOKUPS.labels("miss").inc()
             return None  # just changed: let the database answer
         try:
-            return CachedRedirect.from_json(text)
+            entry = CachedRedirect.from_json(text)
         except (ValueError, KeyError, TypeError):
+            CACHE_LOOKUPS.labels("miss").inc()
             logger.warning("Removing a broken cache entry for %s", short_code)
             # set() never overwrites (NX), so the broken entry must go first
             try:
@@ -162,6 +168,8 @@ class RedisRedirectCache:
             except REDIS_ERRORS:
                 logger.warning("Redis unavailable: broken entry for %s kept", short_code)
             return None
+        CACHE_LOOKUPS.labels("hit").inc()
+        return entry
 
     async def set(self, short_code: str, entry: CachedRedirect, now: datetime) -> None:
         """Store the entry until its TTL ends, but only if the key is empty.

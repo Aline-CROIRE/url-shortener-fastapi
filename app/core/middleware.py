@@ -12,6 +12,13 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.core.logging import bind_request_context, clean_for_log
+from app.core.metrics import (
+    HTTP_DURATION,
+    HTTP_IN_PROGRESS,
+    HTTP_REQUESTS,
+    UNMATCHED_ROUTE,
+    method_label,
+)
 
 logger = logging.getLogger("app.requests")
 
@@ -135,6 +142,45 @@ class BodySizeLimitMiddleware:
             return await receive()
 
         return replay
+
+
+class MetricsMiddleware:
+    """Count every request and time it, labelled by its ROUTE TEMPLATE (a plain ASGI middleware).
+
+    The router stores the matched route in the request's scope; after the app ran we
+    read its template ("/{short_code}"). No match (404 for an unknown path) =
+    "unmatched", so scanners trying random paths cannot create new time series.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        """Wrap the next ASGI app."""
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Run the request, then record its count, status and duration."""
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        method = method_label(scope["method"])
+        status_code = 500  # if the app crashes before answering, the client gets a 500
+
+        async def send_and_remember_status(message: Message) -> None:
+            nonlocal status_code
+            if message["type"] == "http.response.start":
+                status_code = message["status"]
+            await send(message)
+
+        in_progress = HTTP_IN_PROGRESS.labels(method)
+        in_progress.inc()
+        start = time.perf_counter()
+        try:
+            await self.app(scope, receive, send_and_remember_status)
+        finally:  # also when the app raised: a crash must be counted too
+            in_progress.dec()
+            route = getattr(scope.get("route"), "path", None) or UNMATCHED_ROUTE
+            HTTP_REQUESTS.labels(method, route, str(status_code)).inc()
+            HTTP_DURATION.labels(method, route).observe(time.perf_counter() - start)
 
 
 # Sent with every response. nosniff: browsers must trust our Content-Type and never

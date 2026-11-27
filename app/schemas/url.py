@@ -24,7 +24,7 @@ from app.schemas.user import OwnerRead
 ALIAS_PATTERN = r"^[A-Za-z0-9_-]+$"
 # Aliases that would clash with the app's own paths (/docs, /health, /api/...)
 RESERVED_ALIASES = frozenset(
-    {"api", "docs", "redoc", "openapi", "openapi.json", "admin", "health", "static"}
+    {"api", "docs", "redoc", "openapi", "openapi.json", "admin", "health", "static", "metrics"}
 )
 # The longest original URL accepted: a common limit that browsers and proxies handle
 MAX_URL_LENGTH = 2048

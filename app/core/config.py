@@ -54,6 +54,9 @@ class Settings(BaseSettings):
     app_version: str = "0.1.0"
     environment: Literal["development", "production", "testing"] = "development"
     debug: bool = False
+    # Protects GET /metrics: Prometheus must send "Authorization: Bearer <token>".
+    # Not set = open (fine when /metrics is only reachable on an internal network)
+    metrics_token: SecretStr | None = None
     # "json": one JSON object per line (production, log collectors); "text": for reading by eye
     log_format: Literal["json", "text"] = "json"
     base_url: str = "http://localhost:8000"
@@ -181,6 +184,12 @@ class Settings(BaseSettings):
                 f"rediss://..., not {value!r}"
             )
         return value
+
+    @field_validator("metrics_token", mode="before")
+    @classmethod
+    def empty_token_means_none(cls, value: Any) -> Any:
+        """Read "METRICS_TOKEN=" (empty) as "no token", not as an empty secret."""
+        return None if value == "" else value
 
     @field_validator("celery_broker_url")
     @classmethod

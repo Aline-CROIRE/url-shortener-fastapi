@@ -9,13 +9,14 @@ from redis.asyncio import Redis
 from slowapi.errors import RateLimitExceeded
 
 from app.api.router import router
-from app.api.routes import health, redirect
+from app.api.routes import health, metrics, redirect
 from app.cache import NullRedirectCache, RedirectCache, RedisRedirectCache
 from app.core.config import Settings, get_settings
 from app.core.error_handlers import register_exception_handlers
 from app.core.logging import setup_logging
 from app.core.middleware import (
     BodySizeLimitMiddleware,
+    MetricsMiddleware,
     RequestLoggingMiddleware,
     SecurityHeadersMiddleware,
 )
@@ -103,13 +104,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # the security headers from the two middlewares around it
     app.add_middleware(BodySizeLimitMiddleware)
     app.add_middleware(RequestLoggingMiddleware)
-    app.add_middleware(SecurityHeadersMiddleware)  # added last = outermost: every response
+    app.add_middleware(SecurityHeadersMiddleware)
+    # Added last = outermost: counts and times every request, 413s and crashes included
+    app.add_middleware(MetricsMiddleware)
     register_exception_handlers(app)
     # The login rate limit (slowapi): its decorator finds the limiter on app.state
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
     app.include_router(health.router)
+    app.include_router(metrics.router)
     app.include_router(router)
     # Catch-all "/{short_code}" route: must be included LAST so it
     # does not hide /health, /docs, /openapi.json or /api/v1/...

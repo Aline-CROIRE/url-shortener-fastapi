@@ -6,6 +6,7 @@ from typing import Any
 
 import anyio
 
+from app.core.metrics import CLICK_EVENTS
 from app.services.clicks import ClickEvent
 
 logger = logging.getLogger(__name__)
@@ -32,3 +33,6 @@ class CeleryClickTracker:
             logger.warning(
                 "Click for url_id=%s not queued (is the broker down?)", event.url_id, exc_info=True
             )
+            CLICK_EVENTS.labels("lost").inc()
+        else:
+            CLICK_EVENTS.labels("queued").inc()
