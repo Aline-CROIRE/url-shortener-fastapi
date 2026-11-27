@@ -14,12 +14,14 @@ READINESS /health/ready  "Can it serve real requests right now?" Checks PostgreS
 import asyncio
 import logging
 from collections.abc import Awaitable
-from typing import Annotated, Any
+from typing import Any
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Response, status
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import DbSession, ReadDbSession, RedirectCacheDep, SettingsDep
+from app.cache import RedirectCache
 from app.db.database import ping_database
 
 logger = logging.getLogger(__name__)
@@ -42,7 +44,7 @@ async def within_timeout(check: Awaitable[Any]) -> Any:
         return await check
 
 
-async def database_is_up(db: DbSession) -> bool:
+async def database_is_up(db: AsyncSession) -> bool:
     """Run the smallest possible query to prove PostgreSQL answers."""
     try:
         await within_timeout(ping_database(db))
@@ -52,12 +54,12 @@ async def database_is_up(db: DbSession) -> bool:
     return True
 
 
-async def replica_is_up(db: ReadDbSession, settings: SettingsDep) -> bool | None:
+async def replica_is_up(db: AsyncSession, replica_url: str) -> bool | None:
     """Check the read replica; return None when no replica is configured.
 
     Without a replica, reads use the primary database.
     """
-    if not settings.database_replica_url:
+    if not replica_url:
         return None
     try:
         await within_timeout(ping_database(db))
@@ -67,7 +69,7 @@ async def replica_is_up(db: ReadDbSession, settings: SettingsDep) -> bool | None
     return True
 
 
-async def cache_is_up(cache: RedirectCacheDep) -> bool | None:
+async def cache_is_up(cache: RedirectCache) -> bool | None:
     """PING Redis; None when no REDIS_URL is configured."""
     try:
         result: bool | None = await within_timeout(cache.ping())
@@ -109,12 +111,22 @@ async def check_live(response: Response) -> dict[str, str]:
 @router.get("/health/ready", summary="Readiness probe (same check as /health)")
 async def check_ready(
     response: Response,
-    database_ok: Annotated[bool, Depends(database_is_up)],
-    replica_ok: Annotated[bool | None, Depends(replica_is_up)],
-    cache_ok: Annotated[bool | None, Depends(cache_is_up)],
+    db: DbSession,
+    read_db: ReadDbSession,
+    cache: RedirectCacheDep,
+    settings: SettingsDep,
 ) -> dict[str, str]:
     """Return 200 when every configured component answers, else 503."""
     response.headers.update(NO_STORE)
+    # asyncio.gather: start all three checks at once and wait for all of them.
+    # Each one mostly WAITS (network); while one waits, the others run. Worst
+    # case = the slowest check (2 s), not the sum of all three (6 s).
+    # (db and read_db are separate sessions: one connection each, never shared.)
+    database_ok, replica_ok, cache_ok = await asyncio.gather(
+        database_is_up(db),
+        replica_is_up(read_db, settings.database_replica_url),
+        cache_is_up(cache),
+    )
     # Module 8: Redis counts too. It is the cache AND Celery's job queue; without
     # it every click is lost. "disabled" (no REDIS_URL) or no replica is fine.
     healthy = database_ok and replica_ok is not False and cache_ok is not False
