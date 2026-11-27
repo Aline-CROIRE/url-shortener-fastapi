@@ -40,9 +40,11 @@ USER app
 
 EXPOSE 8000
 
-# Docker marks the container "unhealthy" if /health fails (e.g. Redis is down -> 503)
+# LIVENESS: Docker marks the container "unhealthy" if the process stops answering.
+# /health/live on purpose, not /health: a database outage must not make Docker
+# (or an orchestrator) restart every app container. Readiness is /health/ready.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=4)"]
+    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/live', timeout=4)"]
 
-# Default = production: Gunicorn managing Uvicorn workers
+# Default = production: Gunicorn managing Uvicorn workers (settings: gunicorn.conf.py)
 CMD ["gunicorn", "-c", "gunicorn.conf.py", "app.main:app"]
