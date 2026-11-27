@@ -55,6 +55,9 @@ six==1.17.0
 tzlocal==5.4.5
 tzdata==2026.6 ; sys_platform == "win32"
 
+# Metrics: Prometheus client (GET /metrics), multiprocess mode under Gunicorn
+prometheus-client==0.26.0
+
 # Click geo-location: reads MaxMind .mmdb files (GeoLite2-City), used by the worker
 maxminddb==3.3.0
 
