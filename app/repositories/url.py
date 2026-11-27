@@ -245,6 +245,29 @@ class URLRepository:
         return url
 
     @staticmethod
+    def archive_expired_statement(now: datetime) -> Update:
+        """Switch off every live URL whose expiry is reached, in ONE bulk UPDATE.
+
+        UPDATE urls SET is_active = false, updated_at = now()
+        WHERE is_active AND deleted_at IS NULL AND expires_at <= :now
+        RETURNING short_code
+
+        - One statement for any number of rows (never one UPDATE per URL).
+        - RETURNING gives the short codes back in the same trip (to clear their cache).
+        - "Expired" is the same rule as the redirect's (URL.is_expired: <= now).
+        - If an owner is changing a row at that moment, Postgres waits for the
+          owner's commit and checks the WHERE again on the new row: a link the
+          owner just extended is not archived.
+        """
+        return (
+            update(URL)
+            .where(URL.is_active.is_(True), URL.deleted_at.is_(None), URL.is_expired(now))
+            .values(is_active=False)  # updated_at = now() too (TimestampMixin onupdate)
+            .returning(URL.short_code)
+            .execution_options(synchronize_session=False)
+        )
+
+    @staticmethod
     def increment_click_count_statement(url_id: int) -> Update:
         """Add 1 INSIDE the database: UPDATE urls SET click_count = click_count + 1.
 

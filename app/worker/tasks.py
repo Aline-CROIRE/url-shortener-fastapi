@@ -1,11 +1,14 @@
 """Celery tasks: the jobs the worker takes from the queue."""
 
 import logging
+from datetime import UTC, datetime
 
 from sqlalchemy.exc import IntegrityError, InterfaceError, OperationalError
 
 from app.db.errors import is_foreign_key_violation
+from app.repositories.url import URLRepository
 from app.services.clicks import ClickEvent, click_statements
+from app.worker.cache import clear_cached_redirects, get_redis
 from app.worker.celery_app import celery_app
 from app.worker.db import get_session_factory
 
@@ -55,3 +58,28 @@ def track_click_task(
         logger.warning("Click for url_id=%s dropped: the URL no longer exists", event.url_id)
         return False
     return True
+
+
+@celery_app.task(
+    name="urls.archive_expired",
+    autoretry_for=RETRYABLE_DB_ERRORS,
+    max_retries=3,
+    retry_backoff=True,
+    retry_jitter=True,
+)
+def archive_expired_urls_task() -> int:
+    """Switch off (archive) every expired URL; run every night by Celery beat.
+
+    Safe to run twice: a second run finds nothing left to archive.
+
+    Returns:
+        How many URLs were archived.
+    """
+    now = datetime.now(UTC)
+    # ONE bulk UPDATE ... RETURNING short_code, committed at the end of the block
+    with get_session_factory().begin() as session:
+        short_codes = list(session.scalars(URLRepository.archive_expired_statement(now)))
+    # AFTER the commit: their cached redirects must go (they are no longer live)
+    clear_cached_redirects(get_redis(), short_codes)
+    logger.info("Archived %d expired URLs", len(short_codes))
+    return len(short_codes)

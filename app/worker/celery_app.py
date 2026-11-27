@@ -5,6 +5,7 @@ Start beat:        celery -A app.worker.celery_app:celery_app beat --loglevel=IN
 """
 
 from celery import Celery
+from celery.schedules import crontab
 
 from app.core.config import get_settings
 
@@ -32,6 +33,14 @@ def create_celery_app(broker_url: str) -> Celery:
             "max_retries": 0,  # no reconnect loop when opening the connection
             "socket_connect_timeout": 1,  # seconds to wait for Redis to accept
             "socket_timeout": 5,  # seconds to wait for an answer from Redis
+        },
+        # Celery beat's timetable: which task to queue, and when (UTC, see timezone)
+        beat_schedule={
+            "archive-expired-urls": {
+                "task": "urls.archive_expired",
+                # Every night at 02:00 UTC: few visitors, and it runs once a day
+                "schedule": crontab(hour=2, minute=0),
+            },
         },
     )
     return celery
