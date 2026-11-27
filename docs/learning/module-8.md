@@ -300,6 +300,7 @@ before Docker's 5 s timeout; responses have `Cache-Control: no-store`.
 - `workers = WEB_CONCURRENCY or 2 x CPU + 1`.
 - `timeout 30` (kill a stuck worker), `graceful_timeout 30` (finish requests on deploy), `keepalive 5`.
 - `max_requests 1000 + jitter 100`: workers are replaced now and then (memory leaks cannot grow forever).
+  (Later raised to 10,000 + 1,000 in Phase 12, after the load test showed the cost.)
 - `logconfig_dict` = our JSON config: Gunicorn's own lines are JSON too; its access log is off.
 
 **The connection math (`app/core/capacity.py`)**
@@ -751,3 +752,78 @@ schema is current; the old pods keep serving meanwhile.
 | No CPU limit, only a request | No CPU throttling of latency-sensitive requests | A busy pod can use spare node CPU (memory IS limited) |
 | Worker liveness via `inspect ping` | Proves the worker reads the broker | Starts Python every 60 s |
 | Managed PostgreSQL/Redis (not in the manifests) | Backups, failover by the provider | Not runnable on a bare cluster without them |
+
+## Phase 14 — Final check
+
+- README: the architecture diagram shows the optional Prometheus and Jaeger; a table maps
+  each learning objective to where it is met; every new endpoint and setting is documented.
+- Clean clone (only tracked files, new volumes): see the result in the Phase 14 summary.
+
+## Review quiz, part 2 (Phases 8-13)
+
+11. Why did `track_click_task.delay(url_id, ip_address, user_agent)` fail at first, and why
+    is making the extra arguments optional safe for messages already waiting in the queue?
+12. `/health` used to take 1.02 s with two slow checks and now ~0.5 s. Which line changed
+    that, and why must each check use its own session?
+13. A metric labelled with the real path (`/abc1234`) instead of the template
+    (`/{short_code}`): name two problems. What happens with three Gunicorn workers if
+    multiprocess mode is off?
+14. One redirect, one trace: how does the worker's span end up in the SAME trace as the
+    API's request, although it runs in another process a moment later?
+15. Why does the worker start tracing in `worker_process_init` and not when the module is
+    imported?
+16. In the CPU profile, the top line was `GetQueuedCompletionStatus`. Is that a problem to
+    fix? And what did the profiler itself get wrong in its first run?
+17. The load test showed 8 connection resets and a p99 of 710 ms. What caused both, and why
+    was the fix safe to make?
+18. Startup, liveness, readiness: what does each check here, and what does Kubernetes do
+    when each one fails? Why does the startup probe compare the database's migration with
+    the code's?
+19. Why is `WEB_CONCURRENCY` set explicitly in the ConfigMap instead of "2 x CPU + 1", and why
+    does beat use `strategy: Recreate`?
+20. Your `.env` had `REDIS_URL=redis://localhost:6379/0`. What did that do on Windows, and how
+    was it found?
+
+<details>
+<summary>Answers, part 2</summary>
+
+11. The task required a 4th argument (`referrer`), so the 3-argument call raised
+    `TypeError`. With defaults (`referrer=None`, `clicked_at=None`) both the old 5-value
+    messages and the brief's 3-value call fit the same function: adding OPTIONAL parameters
+    at the end never breaks existing callers.
+12. `await asyncio.gather(database_is_up(db), replica_is_up(...), cache_is_up(cache))`
+    starts all checks at once; the total is the slowest one, not the sum. One session =
+    one connection, and one connection can run only one query at a time.
+13. (a) Cardinality: one time series per short code = millions of series, slow and
+    expensive. (b) The codes leak into the monitoring system. Without multiprocess mode
+    each scrape reaches ONE random worker: counts jump around (we saw 4, 16 and 12
+    instead of 32).
+14. The Celery instrumentation puts the current trace context into the task message's
+    headers (W3C `traceparent`: trace id + parent span id). The worker's instrumentation
+    reads it and starts its span as a child of that parent.
+15. Celery's prefork pool copies (forks) the main process into worker processes. The
+    span exporter sends batches from a background THREAD, and threads are not copied by a
+    fork: set up before the fork, the children would collect spans that are never sent.
+16. No: it is the event loop WAITING for the network (PostgreSQL, Redis), idle time, not
+    work. The first run replaced the click tracker with `app.dependency_overrides`;
+    FastAPI then re-inspected the override on every request (`inspect`, `get_dependant`),
+    adding CPU and memory that the real app does not have.
+17. Workers reached `max_requests=1000` mid-test and were recycled: an exiting worker
+    closes its keep-alive connections (clients reusing one get a reset), and the new
+    worker starts cold (new DB and Redis connections = slow requests). Safe because the
+    profile showed no memory leak, so recycling every 10,000 requests is enough of a
+    safety net. Result: 0 errors, p99 290 ms.
+18. Startup `/health/startup`: DB answers and its schema is at the newest migration;
+    failing = keep waiting (no liveness, no traffic yet). Liveness `/health/live`: the
+    process answers; failing = restart the pod. Readiness `/health/ready`: PostgreSQL +
+    Redis; failing = no traffic, no restart. The migration check stops a NEW pod (new
+    code) from serving before the migration Job updated the schema it expects.
+19. In a container `os.cpu_count()` sees the node's cores (e.g. 64 -> 129 workers, far over
+    the database connection budget). Recreate stops the old beat before starting the new
+    one; a rolling update would run two beats at once and send scheduled jobs twice.
+20. `localhost` resolves to IPv6 `::1` first; Docker listened only on IPv4, so every async
+    Redis call waited for its 0.5 s timeout and the cache looked "down" whenever the app
+    ran outside Docker. Found when the profiler logged "Redis unavailable" on every
+    request; confirmed by timing `localhost` (0.52 s timeout) vs `127.0.0.1` (0.01 s).
+
+</details>

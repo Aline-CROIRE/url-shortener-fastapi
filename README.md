@@ -34,6 +34,8 @@ Useful Docker commands:
 docker compose ps                                  # every service and its health
 docker compose logs -f app celery-worker           # follow the JSON logs
 docker compose restart celery-worker               # after changing a task (no hot reload)
+docker compose up -d --build                       # after requirements.txt changed: rebuild ALL
+                                                   # images (the code is mounted, the packages are not)
 # run the nightly archive now, instead of waiting for 02:00 UTC
 docker compose exec celery-worker celery -A app.worker.celery_app:celery_app call urls.archive_expired
 # is the worker alive, and which tasks does it know?
@@ -123,6 +125,8 @@ flowchart LR
         db[("PostgreSQL 17")]
         migrate["migrate<br/>alembic upgrade head<br/>once, then exits"]
         replica[("db-replica<br/>read-only, optional")]
+        prometheus["prometheus<br/>(profile monitoring)"]
+        jaeger["jaeger<br/>(profile tracing)"]
     end
 
     client -->|HTTP| app
@@ -136,9 +140,14 @@ flowchart LR
     migrate -->|tables| db
     app -.->|read-only queries, when enabled| replica
     db -.->|streaming replication| replica
+    prometheus -.->|scrapes GET /metrics| app
+    app -.->|spans over OTLP| jaeger
+    worker -.->|spans over OTLP| jaeger
 ```
 
 - **migrate** runs the database migrations first; the app and the worker start only after it succeeded.
+- **Observability (optional):** Prometheus scrapes `/metrics`; the app and the worker send
+  trace spans to Jaeger when `OTEL_EXPORTER_OTLP_ENDPOINT` is set. Logs are JSON on stdout.
 - **One Redis server, two DB numbers:** DB 0 caches redirects and holds the rate-limit
   counters; DB 1 is Celery's job queue. Clearing the cache can never delete queued jobs.
   In production Redis evicts only keys with a TTL (`volatile-lru`), so jobs are never evicted.
@@ -560,6 +569,16 @@ The Module 8 brief is written for Django; each part has a FastAPI equivalent:
 `django-redis` -> `redis.asyncio` client created in the app lifespan; Celery + Redis broker
 (same); Gunicorn WSGI -> Gunicorn with `uvicorn_worker.UvicornWorker` (ASGI); JSON logging
 with `logging.config.dictConfig`.
+
+### Learning objectives: where each one is met
+
+| Objective | Where |
+|---|---|
+| Async/await for concurrent I/O | The whole app is async (asyncpg, `redis.asyncio`); `/health` runs its checks concurrently with `asyncio.gather`; blocking calls (`.delay()`) run in threads; clicks are written behind the response (Celery) |
+| Profile CPU, memory and latency | `app/scripts/profile_redirects.py` (percentiles, `cProfile`, `tracemalloc`); Locust in `loadtest/`; results and what they changed: [docs/learning/module-8-profile.md](docs/learning/module-8-profile.md) |
+| Tune Gunicorn / Uvicorn workers and threads | `gunicorn.conf.py` (`WEB_CONCURRENCY`, connection budget, `max_requests` chosen from the load test, no `threads` for Uvicorn workers); `THREAD_POOL_SIZE` for AnyIO's pool; the password pool of 4 |
+| Observability: Prometheus, OpenTelemetry, structured logs | `/metrics` (multiprocess), traces API -> queue -> worker with `trace_id` in the JSON logs, `request_id` on every line |
+| Kubernetes liveness, readiness, startup probes | `/health/live`, `/health/ready`, `/health/startup` (schema at the newest migration); [deploy/k8s/](deploy/k8s) |
 
 | Decision | What we gain | What we pay |
 |---|---|---|
