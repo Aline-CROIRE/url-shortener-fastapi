@@ -511,3 +511,63 @@ fallback working.
 | Never raise from `locate()` | A geo problem never costs a click | A broken setup only shows as warnings + "Unknown" |
 | Only the country code and city name are stored | Small rows; fits the columns | No region, latitude/longitude |
 | Location at click time is stored | History stays true when IP blocks move | Old clicks are not corrected by later database updates |
+
+## Phase 10 — Prometheus metrics
+
+**Goal.** Logs tell the story of ONE request; metrics count ALL of them. Prometheus
+reads (scrapes) `GET /metrics` every few seconds and keeps the numbers over time, so we
+get graphs ("p95 latency of redirects today") and alerts ("clicks are being lost").
+Like a car dashboard: the logbook says what happened on each trip; the dashboard shows
+speed and fuel right now, and a warning light turns on by itself.
+
+**What is measured**
+
+| Metric | Type | Why |
+|---|---|---|
+| `http_requests_total{method,route,status}` | counter (only goes up) | Traffic and error rate per endpoint |
+| `http_request_duration_seconds{method,route}` | histogram (buckets) | Percentiles: p95 = 95% of requests are faster |
+| `http_requests_in_progress{method}` | gauge (up and down) | Load right now |
+| `redirect_cache_lookups_total{result}` | counter | Hit ratio; Redis errors |
+| `click_events_total{outcome}` | counter | `lost > 0` = the broker is down: alert |
+
+**Three things that are easy to get wrong**
+1. **Cardinality.** Every label combination is a new time series. A `path` label with
+   real short codes = one series per link (millions), and the codes leak. We use the
+   route template from the router (`scope["route"].path`); no match = `unmatched`;
+   unknown HTTP methods = `other`. A scanner cannot create new series.
+2. **Several Gunicorn workers.** Each has its own counters. A scrape reaches ONE random
+   worker, so the numbers jump around. Multiprocess mode: `gunicorn.conf.py` sets
+   `PROMETHEUS_MULTIPROC_DIR` before the workers start, each worker writes files there,
+   `/metrics` adds them up. `on_starting` clears old files; `child_exit` removes a dead
+   worker's live gauge. Seen live: 3 workers counted 4, 16 and 12; one scrape showed 32.
+3. **Exposure.** `/metrics` shows internals (routes, traffic). Keep it on an internal
+   network, or set `METRICS_TOKEN` (compared with `hmac.compare_digest`). An empty
+   `METRICS_TOKEN=` means "no token" (a test guards this), not an empty secret.
+
+**Seen live with Prometheus** (`docker compose --profile monitoring up -d prometheus`):
+target up; `sum by (route, status) (http_requests_total)` showed 20 redirects under
+`/{short_code}`, the scanner probe under `unmatched`; cache 1 miss + 19 hits; 20 clicks queued.
+
+**What changed**
+
+| File | Change |
+|---|---|
+| `app/core/metrics.py` | New: the metrics, `method_label`, `render_metrics` (multiprocess aware) |
+| `app/core/middleware.py`, `app/main.py` | `MetricsMiddleware` (outermost: counts 413s and crashes too) |
+| `app/api/routes/metrics.py` | `GET /metrics` (hidden from Swagger), optional Bearer token, `no-store` |
+| `app/cache/redirect_cache.py`, `app/worker/tracker.py` | hit / miss / error and queued / lost counters |
+| `app/core/config.py`, `.env.example` | `METRICS_TOKEN` (empty = none) |
+| `app/schemas/url.py` | `metrics` is a reserved alias (the link would hide behind `/metrics`) |
+| `gunicorn.conf.py`, `pyproject.toml` | Multiprocess folder + `on_starting` / `child_exit` hooks |
+| `docker/prometheus/prometheus.yml`, `docker-compose.yml` | Optional Prometheus (profile `monitoring`) with example queries |
+| tests | `test_metrics.py` (incl. two real processes added up), Gunicorn hook tests |
+
+**Tradeoffs**
+
+| Choice | Gain | Cost |
+|---|---|---|
+| Route template labels | Bounded number of series; no codes leak | No per-link numbers in Prometheus (analytics has them) |
+| Histogram with fixed buckets | Percentiles over any time range, across workers | Approximate (within a bucket); fixed bucket choice |
+| Multiprocess mode | Correct totals for the whole server | Metric files on disk; gauges need a mode (`livesum`) |
+| Metrics in the API process only | Simple | Worker-side numbers come from logs (or a Celery exporter) |
+| Optional token instead of always-on auth | Easy local use | Production must set it or keep `/metrics` internal |

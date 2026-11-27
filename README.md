@@ -39,6 +39,7 @@ docker compose exec celery-worker celery -A app.worker.celery_app:celery_app cal
 # is the worker alive, and which tasks does it know?
 docker compose exec celery-worker celery -A app.worker.celery_app:celery_app inspect registered
 docker compose exec redis redis-cli -n 0 --scan --pattern 'url:redirect:*'   # cached redirects
+docker compose --profile monitoring up -d prometheus   # metrics UI: http://localhost:9090
 ```
 
 ### Without Docker for the app
@@ -86,6 +87,7 @@ Settings are read from environment variables (or `.env`); see [.env.example](.en
 | `CACHE_TTL_SECONDS` | `900` | Longest time a redirect stays cached (never past the link's expiry) |
 | `CELERY_BROKER_URL` | `redis://127.0.0.1:6379/1` | Celery's job queue: Redis **DB 1**. Must differ from the cache's DB |
 | `GEOIP_DATABASE_PATH` | empty | MaxMind GeoLite2-City file: the worker saves each click's country and city. Empty = "Unknown". See [geoip/README.md](geoip/README.md) |
+| `METRICS_TOKEN` | empty | When set, `GET /metrics` needs `Authorization: Bearer <token>` |
 | `LOG_FORMAT` | `json` | `json`: one JSON object per line; `text`: for reading by eye |
 | `WEB_CONCURRENCY` | 2 x CPU cores + 1 | Gunicorn worker processes |
 | `DB_POOL_SIZE` / `DB_MAX_OVERFLOW` | `3` / `2` | Database connections per web worker (kept open / extra when busy) |
@@ -273,6 +275,7 @@ erDiagram
 | `GET` | `/{short_code}/` | Redirect (302) | Anyone |
 | `GET` | `/health` | Readiness: PostgreSQL (`SELECT 1`) and Redis (`PING`); `200` or `503` | Anyone |
 | `GET` | `/health/ready` | Same check as `/health` (for load balancers) | Anyone |
+| `GET` | `/metrics` | Prometheus metrics (not in Swagger); see below | Prometheus (`METRICS_TOKEN` if set) |
 | `GET` | `/health/live` | Liveness: the process answers; checks nothing else (Docker `HEALTHCHECK`) | Anyone |
 
 `GET /health` answers `200` like this, or `503` with `"status": "unhealthy"` and the failing
@@ -296,6 +299,21 @@ Every error has the same shape:
 | `409` | A custom alias or chosen username that is already taken |
 | `413` / `422` | Body over 64 KB / invalid input |
 | `429` | Too many attempts (`Retry-After` says when to try again) |
+
+### Metrics (Prometheus)
+
+| Metric | Type | Labels | Answers |
+|---|---|---|---|
+| `http_requests_total` | counter | `method`, `route`, `status` | Requests per second, error rate per endpoint |
+| `http_request_duration_seconds` | histogram | `method`, `route` | p50 / p95 / p99 latency per endpoint |
+| `http_requests_in_progress` | gauge | `method` | How busy the workers are right now |
+| `redirect_cache_lookups_total` | counter | `result` = hit / miss / error | Cache hit ratio; Redis errors |
+| `click_events_total` | counter | `outcome` = queued / lost | Lost clicks (alert when > 0) |
+
+`route` is the route **template** (`/{short_code}`), never the real path, and unknown paths
+are `unmatched`: one series per route instead of one per short code. Under Gunicorn every
+worker writes to `PROMETHEUS_MULTIPROC_DIR` and `/metrics` adds them up (seen live: 3
+workers counted 4 + 16 + 12; one scrape showed 32).
 
 ## Authentication
 
@@ -487,6 +505,7 @@ with `logging.config.dictConfig`.
 | Nightly archive: **one bulk UPDATE ... RETURNING**, then clear cache keys | 1095 rows in 0.5 s (measured); a link the owner extends meanwhile is not archived | All matching rows locked for that moment |
 | Archived links still answer `410 url_expired` | The visitor sees the real reason | An owner must send `is_active: true` with a new expiry to revive one |
 | Cache DB 0, broker DB 1; production Redis `volatile-lru` | Clearing or evicting the cache never removes jobs | One server: one memory limit for both |
+| **Prometheus metrics** with route-template labels, multiprocess mode under Gunicorn | Graphs and alerts (latency p95, lost clicks, cache hit ratio) for the whole server | A folder of metric files per server; `/metrics` must be protected or kept internal |
 | **JSON logs** (own formatter), request id on every line via ContextVars, secrets redacted | Logs can be filtered by field; one request's lines are linked | Harder to read by eye (`LOG_FORMAT=text`) |
 | **Liveness** (`/health/live`) vs **readiness** (`/health`, `/health/ready`) | A database outage never causes a restart storm | Two probes to configure |
 | Redis down -> **not ready (503)** | No traffic while clicks would be lost | A strict load balancer also stops redirects that would work |
@@ -553,7 +572,7 @@ app/
 ├── cache/          # Redis redirect cache
 ├── core/           # settings, security, rate limits, errors, JSON logging, sizing
 ├── db/             # database connection
-├── worker/         # Celery app, tasks, beat schedule, click tracker
+├── worker/         # Celery app, tasks, beat schedule, click tracker, GeoIP
 └── scripts/        # seed data
 alembic/            # database migrations
 docs/learning/      # Module 8 notes and tradeoffs, phase by phase
