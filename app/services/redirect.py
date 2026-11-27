@@ -87,10 +87,12 @@ class RedirectService:
                 raise UrlNotFoundError(short_code)
             if url.deleted_at is not None:
                 raise UrlGoneError(short_code, "deleted")
-            if not url.is_active:
-                raise UrlGoneError(short_code, "inactive")
+            # Expiry before is_active: the nightly archive switches expired links
+            # off, and "expired" is still the real reason for the visitor
             if url.is_expired(now):
                 raise UrlGoneError(short_code, "expired")
+            if not url.is_active:
+                raise UrlGoneError(short_code, "inactive")
             entry = CachedRedirect(url.id, url.original_url, url.expires_at)
 
         await self._cache.set(short_code, entry, now)
