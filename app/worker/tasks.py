@@ -33,13 +33,15 @@ def track_click_task(
     url_id: int,
     ip_address: str | None,
     user_agent: str | None,
-    referrer: str | None,
+    referrer: str | None = None,
     clicked_at: str | None = None,
 ) -> bool:
     """Save one click and add 1 to the URL's click_count, in ONE transaction.
 
     Gets only simple values (ids, strings): the message travels as JSON through
     Redis, and the worker is another process with its own database connection.
+    The brief's call track_click_task.delay(url_id, ip_address, user_agent) works
+    as written; the API also sends the referrer and the visit time.
 
     Returns:
         True if saved, False if dropped because the URL no longer exists.
