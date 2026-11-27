@@ -77,3 +77,76 @@ asks us every time.
 | Fail open (Redis errors = miss) | Redirects never fail because of the cache | During a Redis outage every redirect hits the database |
 | Short socket timeouts (0.5 s) | A hanging Redis cannot freeze redirects | A very slow but working Redis is treated as down |
 | Rename the key prefix | Spec naming, easy to `SCAN` | Old `redirect:v1:` keys sit unused until their TTL ends (max 15 min) |
+
+## Phase 3 — Async click tracking with Celery (write-behind)
+
+**Goal.** A visit used to write two rows before the visitor got the 302 (INSERT
+click + UPDATE click_count). Now the redirect only finds the target, answers, and
+hands a small "ticket" to Celery; a worker writes the click a moment later. Like
+a busy café: the cashier hands you your coffee at once and drops the receipt in a
+box; someone files the receipts in the back. You never wait for the filing.
+
+**The flow**
+1. `GET /{code}` -> cache or DB lookup (read only) -> `Visit(original_url, click)`.
+2. The route adds `clicks.track(click)` as a **background task**: it runs after
+   the 302 is sent.
+3. `CeleryClickTracker.track()` runs `track_click_task.delay(url_id, ip, user_agent,
+   referrer, clicked_at)` in a thread (`.delay()` is blocking network I/O).
+4. The worker runs `track_click_task`: one transaction with
+   `INSERT INTO clicks ...` and `UPDATE urls SET click_count = click_count + 1`.
+
+**What changed**
+
+| File | Change |
+|---|---|
+| `app/services/clicks.py` | New: `ClickEvent` (plain values, `task_args()` / `from_task_args()`), `click_statements()` (the two writes, shared by worker and tests), `ClickTracker` protocol |
+| `app/worker/tasks.py` | New: `track_click_task` with `autoretry_for`, `retry_backoff`, `retry_jitter`, `max_retries=5`; drops a click whose URL row is gone (foreign key error) |
+| `app/worker/db.py` | New: the worker's SYNC engine (psycopg), created per worker process on its first task |
+| `app/worker/tracker.py` | New: `CeleryClickTracker`, sends in a thread, logs and swallows every failure |
+| `app/worker/celery_app.py` | Registers the tasks; publishing fails fast (no retry, 1 s connect timeout) |
+| `app/services/redirect.py` | Reads only; returns `Visit` instead of writing the click |
+| `app/api/routes/redirect.py` | Queues the click with `BackgroundTasks` after the response |
+| `app/repositories/url.py` | `increment_click_count_statement()` (a statement, so sync and async can run it) |
+| `app/db/errors.py` | `is_foreign_key_violation()` |
+| `app/main.py`, `app/api/dependencies.py` | Tracker created in the lifespan, `ClickTrackerDep`; unused write-side click repository removed |
+| tests | `test_click_task.py` (task directly + eager mode), `test_click_tracking.py`; conftest: `worker_db`, `celery_eager`, `recorded_clicks`, `InlineClickTracker` |
+
+**Seen live (Docker):** miss 58 ms, hit 17 ms (Phase 2: 142 / 32 ms). Right after
+3 visits `click_count` was 0; a moment later 3. With Redis stopped, redirects still
+answered 302 from the database and logged "Click ... not queued"; the worker
+reconnected by itself when Redis came back.
+
+**Why only simple values in the task (never an ORM object)**
+- The message travels as JSON through Redis; a `URL` object cannot be turned into JSON
+  (and pickle, which could, can run code when read: we accept JSON only).
+- An ORM object belongs to one session and one database connection in the API
+  process. The worker is another process with its own connection.
+- The object would be a stale copy: by the time the worker runs, the row may have changed.
+  An id is always fresh: the worker asks the database.
+
+**The race condition `click_count = click_count + 1` avoids**
+Read-modify-write in Python: two workers both read 41, both write 42 -> one click lost.
+`UPDATE urls SET click_count = click_count + 1` lets Postgres read and write under a
+row lock in one step: the second waits for the first, reads 42, writes 43.
+
+**Why the worker uses a sync session**
+Celery calls a task as a normal function. Options were: (a) a separate sync engine
+with psycopg, (b) `asyncio.run()` around the async code in each task. We chose (a):
+Celery's normal style, and each worker process keeps a pool of reused connections.
+(b) would start an event loop and open a new connection for every click. The cost of (a): the
+same SQL is run by two drivers, so the statements live in one shared function.
+
+**Tradeoffs**
+
+| Choice | Gain | Cost |
+|---|---|---|
+| Write-behind with Celery | Redirect never waits for writes; a DB hiccup does not slow visitors | `click_count` is a moment behind; clicks can be lost if the broker is down |
+| Send after the response (`BackgroundTasks`) | The visitor never waits for Redis, even when it is slow | If the server process dies in that moment, the click is lost |
+| `.delay()` in a thread | The event loop keeps serving others | Uses a thread from a limited pool (40) per click being sent |
+| No publish retries, 1 s connect timeout | A dead broker costs ~1 s per click in the background, not 6 s | One failed try = one lost click |
+| Broker down -> log and drop (no DB fallback) | Simple; the DB is not hit harder during an outage | Clicks during the outage are lost (logged) |
+| `clicked_at` sent with the task | Clicks land on the right day even after retries | One more argument than the spec's four |
+| Retry only DB connection/deadlock errors, with backoff + jitter | Survives a DB restart; retries spread out | A click can be saved up to ~2 minutes late |
+| Drop a click whose URL row is gone | No endless retries | Such clicks are lost (logged) |
+| Early ack (Celery default) | A click is never saved twice | If a worker crashes mid-task, that click is lost |
+| Cache hit uses no database | Popular links work even while the DB is down | A row removed outside the API stays cached until its TTL (max 15 min) |
