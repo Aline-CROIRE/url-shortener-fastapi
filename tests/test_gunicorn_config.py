@@ -1,8 +1,10 @@
 """gunicorn.conf.py: worker count, timeouts, JSON logs, and the database connection math."""
 
+import os
 import runpy
 from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -26,6 +28,9 @@ def load_conf(monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
     def load(**env: str) -> dict[str, Any]:
         for name in ("WEB_CONCURRENCY", "DB_POOL_SIZE", "DB_MAX_OVERFLOW", "CELERY_CONCURRENCY"):
             monkeypatch.delenv(name, raising=False)
+        # setenv first, so the test's end restores "not set" even after gunicorn.conf.py sets it
+        monkeypatch.setenv("PROMETHEUS_MULTIPROC_DIR", "placeholder")
+        monkeypatch.delenv("PROMETHEUS_MULTIPROC_DIR")
         for name, value in env.items():
             monkeypatch.setenv(name, value)
         get_settings.cache_clear()
@@ -115,3 +120,52 @@ def test_pool_settings_reach_the_engine(test_settings: Any) -> None:
     assert engine.pool.size() == 4
     assert engine.pool._max_overflow == 1  # type: ignore[attr-defined]
     assert engine.pool._timeout == 7  # type: ignore[attr-defined]
+
+
+# ---------- Prometheus multiprocess mode ----------
+
+
+def test_workers_get_a_shared_metrics_folder(load_conf: Any) -> None:
+    conf = load_conf(WEB_CONCURRENCY="2")
+
+    # Set in the master BEFORE the workers start: prometheus_client reads it at import
+    assert os.environ["PROMETHEUS_MULTIPROC_DIR"] == conf["PROMETHEUS_DIR"]
+
+
+def test_a_metrics_folder_given_by_the_environment_is_kept(load_conf: Any, tmp_path: Path) -> None:
+    conf = load_conf(WEB_CONCURRENCY="2", PROMETHEUS_MULTIPROC_DIR=str(tmp_path))
+
+    assert conf["PROMETHEUS_DIR"] == str(tmp_path)
+
+
+def test_startup_removes_numbers_left_from_the_last_run(load_conf: Any, tmp_path: Path) -> None:
+    folder = tmp_path / "metrics"
+    folder.mkdir()
+    (folder / "counter_4242.db").write_bytes(b"old numbers")
+    (folder / "notes.txt").write_text("not ours")
+    conf = load_conf(WEB_CONCURRENCY="2", PROMETHEUS_MULTIPROC_DIR=str(folder))
+
+    conf["on_starting"](server=None)
+
+    assert not (folder / "counter_4242.db").exists()  # counts restart from zero
+    assert (folder / "notes.txt").exists()  # only metric files are touched
+
+
+def test_startup_creates_the_metrics_folder(load_conf: Any, tmp_path: Path) -> None:
+    folder = tmp_path / "new" / "metrics"
+    conf = load_conf(WEB_CONCURRENCY="2", PROMETHEUS_MULTIPROC_DIR=str(folder))
+
+    conf["on_starting"](server=None)
+
+    assert folder.is_dir()
+
+
+def test_a_dead_worker_no_longer_counts_as_in_progress(load_conf: Any, tmp_path: Path) -> None:
+    conf = load_conf(WEB_CONCURRENCY="2", PROMETHEUS_MULTIPROC_DIR=str(tmp_path))
+    (tmp_path / "gauge_livesum_4242.db").write_bytes(b"requests running in worker 4242")
+    (tmp_path / "counter_4242.db").write_bytes(b"requests counted by worker 4242")
+
+    conf["child_exit"](server=None, worker=SimpleNamespace(pid=4242))
+
+    assert not (tmp_path / "gauge_livesum_4242.db").exists()  # "live" values die with it
+    assert (tmp_path / "counter_4242.db").exists()  # what it counted still counts
