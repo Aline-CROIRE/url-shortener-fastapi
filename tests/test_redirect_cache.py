@@ -235,7 +235,9 @@ def test_redis_down_redirects_still_work(
         db_client.put(f"{API}/{code}", json={"title": "x"}).status_code == 200
     )  # invalidate fails quietly
     health = db_client.get("/health")
-    assert health.status_code == 200  # still healthy: only slower
+    # Redirects still work, but the app is NOT ready: Redis is also the click queue
+    # (Module 8; in Module 6 the cache alone did not count)
+    assert health.status_code == 503
     assert health.json()["cache"] == "down"
 
 
