@@ -1,4 +1,4 @@
-"""FastAPI dependencies: settings, database sessions, cache, repositories and services."""
+"""FastAPI dependencies: settings, sessions, cache, click tracker, repositories and services."""
 
 from typing import Annotated
 
@@ -17,6 +17,7 @@ from app.repositories import (
 )
 from app.services.analytics import AnalyticsService
 from app.services.auth import AuthService
+from app.services.clicks import ClickTracker
 from app.services.redirect import RedirectService
 from app.services.urls import URLService
 
@@ -44,6 +45,14 @@ def get_redirect_cache(request: Request) -> RedirectCache:
 RedirectCacheDep = Annotated[RedirectCache, Depends(get_redirect_cache)]
 
 
+def get_click_tracker(request: Request) -> ClickTracker:
+    """Return the click tracker created at startup (sends clicks to Celery)."""
+    return request.app.state.click_tracker
+
+
+ClickTrackerDep = Annotated[ClickTracker, Depends(get_click_tracker)]
+
+
 # ---------- WRITE side: repositories on the primary (one per request, same session) ----------
 
 
@@ -57,11 +66,6 @@ def get_url_repository(db: DbSession) -> URLRepository:
     return URLRepository(db)
 
 
-def get_click_repository(db: DbSession) -> ClickRepository:
-    """Return a click repository on the write session."""
-    return ClickRepository(db)
-
-
 def get_tag_repository(db: DbSession) -> TagRepository:
     """Return a tag repository on the write session."""
     return TagRepository(db)
@@ -69,7 +73,6 @@ def get_tag_repository(db: DbSession) -> TagRepository:
 
 UserRepoDep = Annotated[UserRepository, Depends(get_user_repository)]
 URLRepoDep = Annotated[URLRepository, Depends(get_url_repository)]
-ClickRepoDep = Annotated[ClickRepository, Depends(get_click_repository)]
 TagRepoDep = Annotated[TagRepository, Depends(get_tag_repository)]
 
 
@@ -94,11 +97,11 @@ ReadClickRepoDep = Annotated[ClickRepository, Depends(get_read_click_repository)
 
 
 def get_redirect_service(
-    db: DbSession, urls: URLRepoDep, clicks: ClickRepoDep, cache: RedirectCacheDep
+    db: DbSession, urls: URLRepoDep, cache: RedirectCacheDep
 ) -> RedirectService:
-    """Build the redirect service (write side)."""
-    # WRITE side: a redirect records a click, and must see a link created a moment ago
-    return RedirectService(session=db, urls=urls, clicks=clicks, cache=cache)
+    """Build the redirect service (it only reads)."""
+    # The PRIMARY, not the replica: a link created a moment ago must redirect at once
+    return RedirectService(session=db, urls=urls, cache=cache)
 
 
 RedirectServiceDep = Annotated[RedirectService, Depends(get_redirect_service)]

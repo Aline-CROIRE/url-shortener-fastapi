@@ -1,9 +1,9 @@
 """Endpoint that sends a visitor from a short code to the original URL."""
 
-from fastapi import APIRouter, Request, status
+from fastapi import APIRouter, BackgroundTasks, Request, status
 from fastapi.responses import RedirectResponse
 
-from app.api.dependencies import RedirectServiceDep
+from app.api.dependencies import ClickTrackerDep, RedirectServiceDep
 from app.api.params import ShortCodePath
 from app.api.responses import GONE, INTERNAL_ERROR, NOT_FOUND, VALIDATION_ERROR
 from app.api.visitor import visitor_from_request
@@ -22,7 +22,8 @@ router = APIRouter(tags=["Redirect"])
     "/{short_code}/",
     summary="Redirect to the original URL",
     description=(
-        "Only active, non-expired links redirect; each visit is recorded. "
+        "Only active, non-expired links redirect; each visit is counted "
+        "(in the background, a moment later). "
         "Swagger shows *Failed to fetch* here because the browser follows the redirect. "
         "Open the short link in a browser tab instead."
     ),
@@ -49,8 +50,13 @@ async def redirect_to_original(
     short_code: ShortCodePath,
     request: Request,
     service: RedirectServiceDep,
+    clicks: ClickTrackerDep,
+    background_tasks: BackgroundTasks,
 ) -> RedirectResponse:
     """Redirect to the original URL."""
-    # 404 unknown, 410 deleted/switched off/expired; otherwise the visit is recorded
-    target = await service.visit(short_code, visitor_from_request(request))
-    return RedirectResponse(url=target, status_code=status.HTTP_302_FOUND)
+    # 404 unknown, 410 deleted/switched off/expired; otherwise where to go + the click
+    visit = await service.visit(short_code, visitor_from_request(request))
+    # Runs AFTER the response is sent: the visitor never waits for the queue.
+    # It calls track_click_task.delay(...) (app/worker/tracker.py).
+    background_tasks.add_task(clicks.track, visit.click)
+    return RedirectResponse(url=visit.original_url, status_code=status.HTTP_302_FOUND)

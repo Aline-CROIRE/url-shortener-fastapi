@@ -21,6 +21,8 @@ from app.core.middleware import (
 )
 from app.core.rate_limit import limiter, rate_limit_exceeded_handler
 from app.db.database import create_engine, create_read_engine, create_session_factory
+from app.worker.tasks import track_click_task
+from app.worker.tracker import CeleryClickTracker
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +71,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
             cache = RedisRedirectCache(redis_client, settings.cache_ttl_seconds)
         app.state.redirect_cache = cache
+        # Clicks go to the Celery queue; a worker saves them (write-behind)
+        app.state.click_tracker = CeleryClickTracker(track_click_task)
 
         yield  # the app handles requests here
 
