@@ -25,8 +25,11 @@ from redis.exceptions import RedisError
 
 logger = logging.getLogger(__name__)
 
-# A version in the key: if the cached shape ever changes, bump it and old keys are ignored
-KEY_PREFIX = "redirect:v1:"
+# "<what>:<for which use>:<which one>" -> url:redirect:abc1234. Easy to find with
+# SCAN url:redirect:* and it never clashes with other keys (rate limits, Celery).
+# If the cached shape ever changes, rename the prefix: old keys are then ignored
+# and expire by themselves.
+KEY_PREFIX = "url:redirect:"
 REDIS_ERRORS = (RedisError, OSError)
 TOMBSTONE = "invalidated"  # not JSON, so it can never be mistaken for an entry
 # Longer than the gap between a request's database read and its cache write
