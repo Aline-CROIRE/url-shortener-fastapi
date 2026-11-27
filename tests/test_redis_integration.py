@@ -44,7 +44,7 @@ pytestmark = [
 async def client() -> AsyncIterator[Redis]:
     redis = Redis.from_url(REDIS_TEST_URL, decode_responses=True)
     yield redis
-    keys = [k async for k in redis.scan_iter("redirect:v1:itest*")]
+    keys = [k async for k in redis.scan_iter("url:redirect:itest*")]
     if keys:
         await redis.delete(*keys)
     await redis.aclose()
