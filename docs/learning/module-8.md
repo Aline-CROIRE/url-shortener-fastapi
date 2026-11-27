@@ -269,3 +269,73 @@ the client), log-injection cleaning of client text.
 | `setup_logging` once per process | A second `create_app()` (tests, scripts) cannot remove handlers | The first call decides (tests force a re-setup when they test it) |
 | Uvicorn/Gunicorn access logs off | One access line per request, with our fields | Their own format is no longer available |
 | Celery uses the same setup | One format for API, worker and beat | Worker lines have no request id (a task is not a request) |
+
+## Phase 6 — Health probes and the production server
+
+**Goal.** Tell the outside world two different things: "the process is alive" and
+"it can serve requests right now", and run the app under Gunicorn with a worker
+count whose database connections are guaranteed to fit. Like a shop: the lights
+being on (alive) is not the same as the till working and the shelves stocked
+(ready). If the delivery truck is late (database down), you put up "back soon"
+(not ready); you do not knock the shop down and rebuild it (restart).
+
+**Liveness vs readiness**
+
+| Probe | Question | Checks | On failure the orchestrator... |
+|---|---|---|---|
+| `/health/live` | Is the process answering? | nothing | restarts the container |
+| `/health/ready` (= `/health`) | Can it serve real requests? | `SELECT 1`, Redis `PING`, replica if set | stops sending traffic (no restart) |
+
+Why split: if liveness checked the database, a database outage would make every
+app container fail liveness and restart, again and again (a "restart storm"),
+which fixes nothing. Docker's `HEALTHCHECK` now uses `/health/live`.
+Each check gives up after 2 s (`asyncio.timeout`) so the probe always answers
+before Docker's 5 s timeout; responses have `Cache-Control: no-store`.
+
+**Seen live (Gunicorn on port 8001):**
+`live 200 / ready 200` -> Redis stopped -> `live 200 / ready 503 (13 ms)` -> Redis back -> `ready 200`.
+
+**Gunicorn (`gunicorn.conf.py`)**
+- `worker_class = "uvicorn_worker.UvicornWorker"`: Gunicorn manages processes, Uvicorn speaks ASGI.
+- `workers = WEB_CONCURRENCY or 2 x CPU + 1`.
+- `timeout 30` (kill a stuck worker), `graceful_timeout 30` (finish requests on deploy), `keepalive 5`.
+- `max_requests 1000 + jitter 100`: workers are replaced now and then (memory leaks cannot grow forever).
+- `logconfig_dict` = our JSON config: Gunicorn's own lines are JSON too; its access log is off.
+
+**The connection math (`app/core/capacity.py`)**
+Every worker process has its OWN pool. At the busiest moment:
+`web workers x (DB_POOL_SIZE + DB_MAX_OVERFLOW) + Celery processes x 2 + 10 reserved <= max_connections`
+- Live: `3 x (3 + 2) + 2 x 2 = 19` -> "Gunicorn ready: 3 workers, up to 19 database connections".
+- `WEB_CONCURRENCY=40`: `40 x 5 + 4 = 204 > 90` -> Gunicorn refuses to start, with that sentence.
+- Without the check, PostgreSQL would answer "too many clients already" at the busiest moment.
+- Pool per worker is small on purpose (3 + 2): an async worker serves many requests on few connections.
+
+**What changed**
+
+| File | Change |
+|---|---|
+| `app/api/routes/health.py` | `/health/live`; `/health` = `/health/ready`; Redis down -> 503; 2 s timeouts; `no-store` |
+| `app/core/capacity.py` | New: `default_web_workers`, `connections_needed`, `check_connection_budget` |
+| `app/core/config.py` | `WORKERS` -> `WEB_CONCURRENCY`; `DB_POOL_SIZE`, `DB_MAX_OVERFLOW`, `DB_POOL_TIMEOUT`, `DB_MAX_CONNECTIONS`, `CELERY_CONCURRENCY` |
+| `app/db/database.py`, `app/main.py` | Pool sizes passed to both engines |
+| `gunicorn.conf.py` | Worker count, budget check, `max_requests`, JSON `logconfig_dict`, `when_ready` log |
+| `Dockerfile` | `HEALTHCHECK` on `/health/live` |
+| `docker-compose.prod.yml`, `.env.example` | New sizing variables |
+| tests | `test_health_probes.py`, `test_gunicorn_config.py`; Redis-down health is now 503 |
+
+**Behaviour changes (explained)**
+- `/health` answers 503 when Redis is down (Module 6: 200). Redis now also carries the click queue.
+- `WORKERS` is renamed `WEB_CONCURRENCY` (the standard name).
+
+**Tradeoffs**
+
+| Choice | Gain | Cost |
+|---|---|---|
+| Separate live and ready probes | No restart storms during a DB outage | Two endpoints to understand and configure |
+| Redis counts for readiness | Traffic stops when clicks would be lost | Redirects (which work without Redis) also get no traffic from a strict balancer |
+| 2 s timeout per check | The probe always answers | A database slower than 2 s counts as down |
+| `2 x CPU + 1` workers by default | Uses every core | On big machines it needs the budget check / a small pool |
+| Refuse to start over budget | A wrong setting fails at deploy, not at peak traffic | Must know `max_connections` (`DB_MAX_CONNECTIONS`) |
+| Small pool per worker (3 + 2) | Many workers fit in 100 connections | Under heavy load a request may wait for a free connection (up to 10 s) |
+| `max_requests` recycling | Memory leaks stay bounded | A worker restart now and then (graceful, jittered) |
+| A PgBouncer in front of Postgres (not done) | Thousands of client connections on few server ones | One more service to run |
