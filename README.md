@@ -40,6 +40,9 @@ docker compose exec celery-worker celery -A app.worker.celery_app:celery_app cal
 docker compose exec celery-worker celery -A app.worker.celery_app:celery_app inspect registered
 docker compose exec redis redis-cli -n 0 --scan --pattern 'url:redirect:*'   # cached redirects
 docker compose --profile monitoring up -d prometheus   # metrics UI: http://localhost:9090
+# traces: start Jaeger, then the app and worker with tracing on (UI: http://localhost:16686)
+docker compose --profile tracing up -d jaeger
+OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318 docker compose up -d app celery-worker
 ```
 
 ### Without Docker for the app
@@ -87,6 +90,8 @@ Settings are read from environment variables (or `.env`); see [.env.example](.en
 | `CACHE_TTL_SECONDS` | `900` | Longest time a redirect stays cached (never past the link's expiry) |
 | `CELERY_BROKER_URL` | `redis://127.0.0.1:6379/1` | Celery's job queue: Redis **DB 1**. Must differ from the cache's DB |
 | `GEOIP_DATABASE_PATH` | empty | MaxMind GeoLite2-City file: the worker saves each click's country and city. Empty = "Unknown". See [geoip/README.md](geoip/README.md) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | empty | Where traces go (OTLP/HTTP), e.g. `http://jaeger:4318`. Empty = tracing off |
+| `OTEL_SERVICE_NAME` / `OTEL_TRACES_SAMPLER_RATIO` | `url-shortener` / `1.0` | Name in the tracing UI (`-api`, `-worker`); share of traces kept |
 | `METRICS_TOKEN` | empty | When set, `GET /metrics` needs `Authorization: Bearer <token>` |
 | `LOG_FORMAT` | `json` | `json`: one JSON object per line; `text`: for reading by eye |
 | `WEB_CONCURRENCY` | 2 x CPU cores + 1 | Gunicorn worker processes |
@@ -315,6 +320,27 @@ are `unmatched`: one series per route instead of one per short code. Under Gunic
 worker writes to `PROMETHEUS_MULTIPROC_DIR` and `/metrics` adds them up (seen live: 3
 workers counted 4 + 16 + 12; one scrape showed 32).
 
+### Traces (OpenTelemetry)
+
+With `OTEL_EXPORTER_OTLP_ENDPOINT` set, every request becomes a trace that follows it
+through the API, PostgreSQL, Redis, the Celery queue and the worker (the task message
+carries the W3C `traceparent`). Every JSON log line written inside a span has its
+`trace_id` and `span_id`, so a log line leads to its trace and back. One real redirect,
+as Jaeger showed it:
+
+```text
++0.0 ms    77.6 ms  api     GET /{short_code}
++22.8 ms    7.8 ms  api       GET                (Redis: cache miss)
++62.8 ms   10.5 ms  api       SELECT             (PostgreSQL)
++75.8 ms    0.8 ms  api       SET                (Redis: cache filled)  -> 302 sent
++203.6 ms  28.0 ms  api     apply_async/clicks.track_click   (after the response)
++236.4 ms 335.2 ms  worker  run/clicks.track_click
++543.5 ms  14.2 ms  worker    INSERT             (the click)
++563.4 ms   2.2 ms  worker    UPDATE             (click_count + 1)
+```
+
+`/health*` and `/metrics` are not traced; SQL spans hold placeholders, never values.
+
 ## Authentication
 
 ```bash
@@ -506,6 +532,7 @@ with `logging.config.dictConfig`.
 | Archived links still answer `410 url_expired` | The visitor sees the real reason | An owner must send `is_active: true` with a new expiry to revive one |
 | Cache DB 0, broker DB 1; production Redis `volatile-lru` | Clearing or evicting the cache never removes jobs | One server: one memory limit for both |
 | **Prometheus metrics** with route-template labels, multiprocess mode under Gunicorn | Graphs and alerts (latency p95, lost clicks, cache hit ratio) for the whole server | A folder of metric files per server; `/metrics` must be protected or kept internal |
+| **OpenTelemetry traces** (off unless an endpoint is set), API -> queue -> worker in one trace, `trace_id` in the logs | See where the time of ONE request went, across processes | More dependencies; spans are batched in memory and sent in the background; sampling needed under heavy load |
 | **JSON logs** (own formatter), request id on every line via ContextVars, secrets redacted | Logs can be filtered by field; one request's lines are linked | Harder to read by eye (`LOG_FORMAT=text`) |
 | **Liveness** (`/health/live`) vs **readiness** (`/health`, `/health/ready`) | A database outage never causes a restart storm | Two probes to configure |
 | Redis down -> **not ready (503)** | No traffic while clicks would be lost | A strict load balancer also stops redirects that would work |
@@ -570,7 +597,7 @@ app/
 ├── repositories/   # database queries
 ├── services/       # business logic, ownership checks, transactions
 ├── cache/          # Redis redirect cache
-├── core/           # settings, security, rate limits, errors, JSON logging, sizing
+├── core/           # settings, security, rate limits, errors, JSON logging, metrics, tracing, sizing
 ├── db/             # database connection
 ├── worker/         # Celery app, tasks, beat schedule, click tracker, GeoIP
 └── scripts/        # seed data

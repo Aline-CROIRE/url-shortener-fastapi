@@ -571,3 +571,61 @@ target up; `sum by (route, status) (http_requests_total)` showed 20 redirects un
 | Multiprocess mode | Correct totals for the whole server | Metric files on disk; gauges need a mode (`livesum`) |
 | Metrics in the API process only | Simple | Worker-side numbers come from logs (or a Celery exporter) |
 | Optional token instead of always-on auth | Easy local use | Production must set it or keep `/metrics` internal |
+
+## Phase 11 — OpenTelemetry tracing
+
+**Goal.** Logs describe one moment, metrics count everything; a TRACE follows ONE request
+through every part of the system and shows where its time went. Like a parcel's tracking
+history: picked up 09:02, sorting centre 09:40, on the van 11:15, delivered 11:58. Each
+line is a SPAN (a step with a start and a duration); together they are the TRACE.
+
+**One real redirect, as Jaeger showed it** (15 spans, 2 services, 1 trace id)
+```text
+api     GET /{short_code}             77.6 ms   (the visitor's request)
+api       GET  (Redis, cache miss)     7.8 ms
+api       connect (PostgreSQL)        26.7 ms   first request: a new pool connection
+api       SELECT                      10.5 ms
+api       SET  (Redis, fill cache)     0.8 ms   -> 302 sent at ~78 ms
+api     BackgroundTask track         180.9 ms   AFTER the response
+api       apply_async/clicks.track_click   28 ms (LPUSH onto the queue)
+worker  run/clicks.track_click       335.2 ms   (same trace: "traceparent" in the message)
+worker    connect                     40.5 ms   first task of this process
+worker    INSERT                      14.2 ms
+worker    UPDATE                       2.2 ms
+```
+What the trace teaches: the visitor waited 78 ms; the 181 ms background task and the
+335 ms worker task did not slow them down. The worker's task was mostly warm-up (first
+connection), its SQL only 16 ms.
+
+**How**
+- `setup_tracing(settings, "api" | "worker")`: a `TracerProvider` with the service name,
+  a sampler (`ParentBased(TraceIdRatioBased(ratio))`) and a `BatchSpanProcessor` that sends
+  spans over OTLP/HTTP in the background. Returns `None` (tracing off) without an endpoint.
+- API: FastAPI (route template as span name; `/health*`, `/metrics` and the ASGI
+  send/receive steps excluded), SQLAlchemy (both engines), Redis, Celery (sending side).
+- Worker: set up in `worker_process_init`, AFTER Celery forks (the exporter's background
+  thread does not survive a fork); flushed in `worker_process_shutdown`.
+- Logs: `RequestContextFilter` adds `trace_id` / `span_id` when a span is active.
+
+**What changed**
+
+| File | Change |
+|---|---|
+| `app/core/tracing.py` | New: provider setup, API/worker/engine instrumentation |
+| `app/main.py` | Tracing with the app; engines instrumented in the lifespan; flush on shutdown |
+| `app/worker/celery_app.py`, `app/worker/db.py` | Per-process worker tracing; its engine instrumented |
+| `app/core/logging.py` | `trace_id` / `span_id` on traced log lines |
+| `app/core/config.py`, `.env.example`, compose files | `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `OTEL_TRACES_SAMPLER_RATIO`; optional Jaeger (profile `tracing`) |
+| `requirements*.txt` | OpenTelemetry SDK, OTLP exporter, 4 instrumentations (+ `certifi` moved to runtime) |
+| `tests/test_tracing.py` | In-memory exporter: span names, same trace for SQL, no values in SQL, exclusions, trace id in logs, `traceparent` in the Celery message, worker setup/flush |
+
+**Tradeoffs**
+
+| Choice | Gain | Cost |
+|---|---|---|
+| OpenTelemetry (vendor-neutral) | Any backend (Jaeger, Tempo, Honeycomb, Datadog) without code changes | Many packages; instrumentations are still 0.x beta |
+| Off unless an endpoint is set | Zero cost in tests and simple setups | Must be switched on per environment |
+| Batch export in the background | Requests never wait for the tracing backend | Spans of a crashed process can be lost; flushed on clean shutdown |
+| `ParentBased` ratio sampling (prod 10%) | Cheap under heavy load; a kept trace is never cut in half | 90% of requests have no trace (logs and metrics still see them) |
+| Route template as span name, SQL placeholders only | No codes or values leak; bounded names | The real path is still in span attributes (traces are access-controlled) |
+| Trace id in the log lines | Jump from a log line to the trace and back | Two more fields on traced lines |
