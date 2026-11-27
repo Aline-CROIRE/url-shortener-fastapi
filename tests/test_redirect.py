@@ -134,7 +134,9 @@ def test_unknown_code_returns_404(db_client: TestClient) -> None:
         ({"expires_at": datetime.now(UTC) - timedelta(days=1)}, "url_expired"),
         ({"is_active": False}, "url_inactive"),
         ({"deleted_at": datetime.now(UTC) - timedelta(hours=1)}, "url_deleted"),
-        ({"is_active": False, "expires_at": datetime.now(UTC) - timedelta(days=1)}, "url_inactive"),
+        # Switched off AND expired = what the nightly archive leaves: the real reason is
+        # the expiry (Module 8; before, "inactive" was checked first)
+        ({"is_active": False, "expires_at": datetime.now(UTC) - timedelta(days=1)}, "url_expired"),
     ],
 )
 def test_dead_links_return_410_and_record_nothing(
