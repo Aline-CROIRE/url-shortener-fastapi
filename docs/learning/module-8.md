@@ -692,3 +692,62 @@ all 40 threads.
 | Locust from Docker | No gevent/Flask in our dependencies | Docker needed to run it |
 | Rare worker recycling | No resets or cold workers under load | A real leak would grow longer before a restart |
 | `THREAD_POOL_SIZE` 40 | Many blocking waits at once, cheap | Too high could hide a slow dependency; too low queues work |
+
+## Phase 13 — Startup probe and Kubernetes manifests
+
+**Goal.** Let Kubernetes heal the app by itself, and never send a request to a pod that
+cannot answer it. Three questions, three probes. Like opening a shop each morning:
+STARTUP = "is the shop set up yet?" (do not judge it before it opened), LIVENESS = "is
+anyone inside?" (if not, send someone new), READINESS = "can it serve right now?" (if
+the till is broken, send customers to the other shop, but do not fire the staff).
+
+| Probe | Ours | Fails -> |
+|---|---|---|
+| startup | `/health/startup`: DB answers AND `alembic_version` = the newest migration | wait (max 150 s) |
+| liveness | `/health/live`: nothing but the process | restart the pod |
+| readiness | `/health/ready`: PostgreSQL + Redis (concurrently) | no traffic, no restart |
+
+**Why the startup probe checks the migration.** A rolling deploy starts new pods with new
+code. If that code expects a column the migration Job has not added yet, every request
+would fail. The new pod stays "starting" (no traffic, no liveness restarts) until the
+schema is current; the old pods keep serving meanwhile.
+
+**Details that matter (each one is tested in tests/test_kubernetes.py)**
+- Probe timeouts (3 s) longer than the app's own checks (2 s).
+- Readiness reacts in 10 s, liveness only after 30 s: stop traffic fast, restart late.
+- `maxUnavailable: 0`: a deploy never drops below the wanted API pods.
+- Beat: 1 replica + `Recreate` (a rolling update would briefly run two beats).
+- `preStop: sleep 5` + `terminationGracePeriodSeconds: 45` (> Gunicorn's 30 s).
+- `WEB_CONCURRENCY` explicit: `os.cpu_count()` in a pod sees the NODE (64 cores = 129 workers).
+- Connection math over ALL pods: 2 x 2 x (3+2) + 1 x 2 x 2 = 24 <= 100 - 10.
+- Memory limit 1 GiB: 2 workers x 4 Argon2 hashes x 64 MB = 512 MB at login peaks.
+- Security: user 999 (numeric, so `runAsNonRoot` can be checked), read-only root, `/tmp`
+  as emptyDir, no privilege escalation, all capabilities dropped; the Secret is never in
+  the kustomization (placeholders in `secret.example.yaml`).
+
+**Checked for real**
+- kubeconform (official Kubernetes 1.33 schemas, strict): 8 valid, 0 invalid (also in CI).
+- `kubectl kustomize deploy/k8s`: renders 7 objects, no Secret.
+- The image run like the pod (read-only root, tmpfs /tmp, user 999): `/health/startup`,
+  `/health/live`, `/health/ready` all 200, 0 warnings; the worker answered ping.
+
+**What changed**
+
+| File | Change |
+|---|---|
+| `app/db/migrations.py` | New: expected head (read once), current revision |
+| `app/api/routes/health.py` | `/health/startup` |
+| `deploy/k8s/*.yaml` | ConfigMap, Secret example, migration Job, API (+ Service, PDB), worker, beat, kustomization |
+| `.github/workflows/ci.yml` | kubeconform step |
+| `.dockerignore` | `deploy/`, `loadtest/` not in the image |
+| tests | `test_health_startup.py` (6), `test_kubernetes.py` (25) |
+
+**Tradeoffs**
+
+| Choice | Gain | Cost |
+|---|---|---|
+| Startup = schema current | No pod serves with code newer than the schema | Pods wait for the Job; a forgotten Job blocks the rollout (visible) |
+| Plain manifests + kustomize | Readable, no extra tool to learn | No templating per environment (Helm would add it) |
+| No CPU limit, only a request | No CPU throttling of latency-sensitive requests | A busy pod can use spare node CPU (memory IS limited) |
+| Worker liveness via `inspect ping` | Proves the worker reads the broker | Starts Python every 60 s |
+| Managed PostgreSQL/Redis (not in the manifests) | Backups, failover by the provider | Not runnable on a bare cluster without them |

@@ -282,6 +282,7 @@ erDiagram
 | `GET` | `/health` | Readiness: PostgreSQL (`SELECT 1`) and Redis (`PING`); `200` or `503` | Anyone |
 | `GET` | `/health/ready` | Same check as `/health` (for load balancers) | Anyone |
 | `GET` | `/metrics` | Prometheus metrics (not in Swagger); see below | Prometheus (`METRICS_TOKEN` if set) |
+| `GET` | `/health/startup` | Startup: PostgreSQL answers and its schema is at the newest migration (Kubernetes `startupProbe`) | Anyone |
 | `GET` | `/health/live` | Liveness: the process answers; checks nothing else (Docker `HEALTHCHECK`) | Anyone |
 
 `GET /health` answers `200` like this, or `503` with `"status": "unhealthy"` and the failing
@@ -356,6 +357,34 @@ a cache hit takes 5.2 ms (p50) vs 14.0 ms for a miss; no memory leak; under load
 Gunicorn workers) 131 requests/s, p95 190 ms, 0 errors. The load test led to two fixes:
 rarer worker recycling (`max_requests` 10,000: recycling caused connection resets and the
 slow tail) and Gunicorn's unused control socket switched off.
+
+## Kubernetes
+
+Manifests in [deploy/k8s/](deploy/k8s): the API (Deployment, Service, PodDisruptionBudget),
+the Celery worker, Celery beat, the migration Job and a ConfigMap. PostgreSQL and Redis
+are managed services, not part of them.
+
+```bash
+docker build -t url-shortener:0.1.0 .          # then push it to your registry
+kubectl create secret generic url-shortener-secrets   --from-literal=DATABASE_URL='postgresql+asyncpg://...'   --from-literal=JWT_SECRET_KEY='...' --from-literal=METRICS_TOKEN='...'
+kubectl apply -k deploy/k8s                      # everything except the Secret
+```
+
+| Probe | Path / check | If it fails |
+|---|---|---|
+| `startupProbe` | `/health/startup`: database reachable, schema at the newest migration (up to 150 s) | Keeps waiting; liveness and readiness do not start yet |
+| `livenessProbe` | `/health/live`: the process answers (nothing else) | Pod restarted |
+| `readinessProbe` | `/health/ready`: PostgreSQL + Redis | No traffic until it passes; no restart |
+| worker liveness | `celery inspect ping` through the broker | Pod restarted |
+| beat liveness | its process is alive | Pod restarted |
+
+Also: rolling updates never drop below the wanted API pods (`maxUnavailable: 0`); beat is
+exactly one pod with `Recreate` (two beats would send every job twice); a 5 s `preStop` pause
+and a 45 s grace period let Gunicorn finish requests; `WEB_CONCURRENCY` is set explicitly
+(in a container `os.cpu_count()` sees the node's cores); every container runs as user 999
+with a read-only root filesystem, no privilege escalation and no capabilities. Checked by
+`tests/test_kubernetes.py` (probes called for real, the connection math) and by kubeconform
+in CI. The image was also run like this (read-only root, user 999): all probes 200.
 
 ## Authentication
 
@@ -550,6 +579,7 @@ with `logging.config.dictConfig`.
 | **Prometheus metrics** with route-template labels, multiprocess mode under Gunicorn | Graphs and alerts (latency p95, lost clicks, cache hit ratio) for the whole server | A folder of metric files per server; `/metrics` must be protected or kept internal |
 | **OpenTelemetry traces** (off unless an endpoint is set), API -> queue -> worker in one trace, `trace_id` in the logs | See where the time of ONE request went, across processes | More dependencies; spans are batched in memory and sent in the background; sampling needed under heavy load |
 | **JSON logs** (own formatter), request id on every line via ContextVars, secrets redacted | Logs can be filtered by field; one request's lines are linked | Harder to read by eye (`LOG_FORMAT=text`) |
+| **Startup probe** = schema at the newest migration | A new pod never serves before the migration job finished | Pods wait for the Job; reading the head once per process |
 | **Liveness** (`/health/live`) vs **readiness** (`/health`, `/health/ready`) | A database outage never causes a restart storm | Two probes to configure |
 | Redis down -> **not ready (503)** | No traffic while clicks would be lost | A strict load balancer also stops redirects that would work |
 | Worker recycling rare (`max_requests` 10,000), measured: no leak; Gunicorn `threads` unused (Uvicorn workers), AnyIO pool `THREAD_POOL_SIZE` | Load test: 0 errors instead of 8 resets, p99 290 ms instead of 710 ms | A real leak would grow longer before a restart |
@@ -622,6 +652,7 @@ app/
 ├── worker/         # Celery app, tasks, beat schedule, click tracker, GeoIP
 └── scripts/        # seed data
 alembic/            # database migrations
+deploy/k8s/         # Kubernetes manifests (kubectl apply -k deploy/k8s)
 docs/learning/      # Module 8 notes, tradeoffs, profiling and load test results
 loadtest/           # Locust load test (runs in Locust's Docker image)
 gunicorn.conf.py    # production server: workers, timeouts, connection budget
