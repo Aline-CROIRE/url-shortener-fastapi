@@ -13,6 +13,9 @@ x-app-environment: &app-environment
   BASE_URL: ${BASE_URL:-http://localhost:8000}
   CELERY_CONCURRENCY: ${CELERY_CONCURRENCY:-2}  # Celery processes (also in the connection math)
   JWT_SECRET_KEY: ${JWT_SECRET_KEY:?set JWT_SECRET_KEY (32+ random characters)}  # signs tokens
+  # Tracing: your OTLP collector (Jaeger, Tempo, ...). Empty = off
+  OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+  OTEL_TRACES_SAMPLER_RATIO: ${OTEL_TRACES_SAMPLER_RATIO:-0.1}  # keep 10% of traces
 
 services:
   app:
