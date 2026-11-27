@@ -23,6 +23,9 @@ bind = "0.0.0.0:8000"
 # WEB_CONCURRENCY if set, else 2 x CPU cores + 1
 workers = settings.web_concurrency or default_web_workers()
 worker_class = "uvicorn_worker.UvicornWorker"  # ASGI (async) workers, not WSGI
+# No "threads": that setting is for Gunicorn's sync/gthread workers and a UvicornWorker
+# ignores it. One worker serves many requests at once on its event loop; blocking calls
+# use AnyIO's thread pool (THREAD_POOL_SIZE), password hashing its own pool of 4.
 
 # Every worker has its own database pool: refuse to start if they could need
 # more connections than PostgreSQL allows (see app/core/capacity.py)
@@ -35,10 +38,18 @@ timeout = 30  # a worker silent for 30 s is killed and replaced (stuck, not just
 graceful_timeout = 30  # on shutdown/deploy: time to finish open requests
 keepalive = 5  # seconds an idle client connection stays open (behind a proxy)
 
-# Replace each worker after ~1000 requests (jitter: not all at the same moment),
-# so a slow memory leak can never grow without limit
-max_requests = 1000
-max_requests_jitter = 100
+# Replace each worker after ~10,000 requests (jitter: not all at the same moment), a
+# safety net so a slow memory leak can never grow without limit. Rare on purpose:
+# - the profile (app/scripts/profile_redirects.py) showed no leak;
+# - a recycled worker closes its keep-alive connections, and a client reusing one at
+#   that moment gets "connection reset" (load test with 1000: 8 of 3709 requests).
+max_requests = 10_000
+max_requests_jitter = 1_000
+
+# Gunicorn 26's runtime control socket (for "gunicornc") is not used: Docker and the
+# orchestrator manage the processes with signals. Off = one admin interface less
+# (and no error: the app user has no home folder to put the socket in).
+control_socket_disable = True
 
 # Logs: Gunicorn's own messages in the same JSON format as the app; no access log
 # (our RequestLoggingMiddleware writes a richer one with the request id)
