@@ -4,6 +4,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+import anyio
 from fastapi import FastAPI
 from redis.asyncio import Redis
 from slowapi.errors import RateLimitExceeded
@@ -50,6 +51,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # Startup: runs once, before the first request.
+        # Threads for blocking calls (see thread_pool_size); the limit belongs to this loop
+        anyio.to_thread.current_default_thread_limiter().total_tokens = settings.thread_pool_size
         # WRITE side: one engine (connection pool) + sessionmaker on the primary
         # Pool size, overflow, timeout: every Gunicorn worker opens its own pool
         pool = (settings.db_pool_size, settings.db_max_overflow, settings.db_pool_timeout)

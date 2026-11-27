@@ -104,6 +104,10 @@ class Settings(BaseSettings):
     # PostgreSQL's max_connections (SHOW max_connections); Gunicorn refuses to start
     # if the workers could need more
     db_max_connections: int = Field(default=100, ge=20)
+    # AnyIO's thread pool per web worker: blocking calls run here (track_click_task.delay,
+    # reading the metrics files). Threads mostly WAIT (network, disk), so 40 is cheap.
+    # Password hashing has its own small pool (app/services/password_work.py).
+    thread_pool_size: int = Field(default=40, ge=1)
     # Celery worker processes (the --concurrency of the celery-worker container)
     celery_concurrency: int = Field(default=2, ge=1)
 
