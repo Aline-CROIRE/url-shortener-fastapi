@@ -5,7 +5,8 @@ expiry date and tags, follow them to be redirected, and see click analytics. Use
 with JWT tokens, and what they may do depends on their tier (Free, Premium or Admin).
 
 Built with **FastAPI** (approved by the instructor instead of Django + DRF),
-**async SQLAlchemy 2.0**, **Alembic**, **PostgreSQL** and **Redis**.
+**async SQLAlchemy 2.0**, **Alembic**, **PostgreSQL**, **Redis** (cache and job queue),
+**Celery** (background jobs) and **Gunicorn** (production server).
 
 ## Quick start
 
@@ -15,15 +16,29 @@ Built with **FastAPI** (approved by the instructor instead of Django + DRF),
 docker compose up --build
 ```
 
-This starts PostgreSQL and Redis, runs the database migrations, then starts the app.
+This starts PostgreSQL and Redis, runs the database migrations, then starts the app, a
+Celery worker (saves clicks in the background) and Celery beat (the nightly archive).
 
 - API docs (Swagger): <http://localhost:8000/docs>
-- Health check: <http://localhost:8000/health>
+- Health: <http://localhost:8000/health> (readiness), <http://localhost:8000/health/live> (liveness)
 
-Production mode (Gunicorn with several workers):
+Production mode (Gunicorn with Uvicorn workers, JSON logs):
 
 ```bash
 POSTGRES_PASSWORD=... JWT_SECRET_KEY=... docker compose -f docker-compose.prod.yml up --build
+```
+
+Useful Docker commands:
+
+```bash
+docker compose ps                                  # every service and its health
+docker compose logs -f app celery-worker           # follow the JSON logs
+docker compose restart celery-worker               # after changing a task (no hot reload)
+# run the nightly archive now, instead of waiting for 02:00 UTC
+docker compose exec celery-worker celery -A app.worker.celery_app:celery_app call urls.archive_expired
+# is the worker alive, and which tasks does it know?
+docker compose exec celery-worker celery -A app.worker.celery_app:celery_app inspect registered
+docker compose exec redis redis-cli -n 0 --scan --pattern 'url:redirect:*'   # cached redirects
 ```
 
 ### Without Docker for the app
@@ -37,7 +52,14 @@ cp .env.example .env               # then set JWT_SECRET_KEY (see Configuration)
 docker compose up -d db redis      # PostgreSQL and Redis
 alembic upgrade head               # create the tables
 uvicorn app.main:app --reload
+
+# in two more terminals: the worker (saves clicks) and beat (nightly archive)
+celery -A app.worker.celery_app:celery_app worker --loglevel=INFO --pool=solo   # --pool=solo on Windows
+celery -A app.worker.celery_app:celery_app beat --loglevel=INFO
 ```
+
+Without a worker the redirects still work; the clicks wait in the Redis queue until a
+worker starts.
 
 ### Database commands
 
@@ -60,7 +82,15 @@ Settings are read from environment variables (or `.env`); see [.env.example](.en
 | `REGISTER_RATE_LIMIT` | `10/hour` | Registrations per client IP |
 | `CREATE_URL_RATE_LIMIT` | `30/minute` | New short URLs per user |
 | `RATE_LIMIT_STORAGE_URI` | empty | Where rate-limit counters live. Empty = `REDIS_URL` if set, else in memory |
-| `REDIS_URL` | empty | Redis for the redirect cache and the rate limits |
+| `REDIS_URL` | empty | Redis **DB 0**: the redirect cache and the rate limits. Empty = no cache |
+| `CACHE_TTL_SECONDS` | `900` | Longest time a redirect stays cached (never past the link's expiry) |
+| `CELERY_BROKER_URL` | `redis://127.0.0.1:6379/1` | Celery's job queue: Redis **DB 1**. Must differ from the cache's DB |
+| `LOG_FORMAT` | `json` | `json`: one JSON object per line; `text`: for reading by eye |
+| `WEB_CONCURRENCY` | 2 x CPU cores + 1 | Gunicorn worker processes |
+| `DB_POOL_SIZE` / `DB_MAX_OVERFLOW` | `3` / `2` | Database connections per web worker (kept open / extra when busy) |
+| `DB_POOL_TIMEOUT` | `10` | Seconds a request waits for a free connection |
+| `DB_MAX_CONNECTIONS` | `100` | PostgreSQL's `max_connections`: Gunicorn refuses to start if the workers could need more |
+| `CELERY_CONCURRENCY` | `2` | Celery worker processes (counted in the connection math) |
 | `BASE_URL` / `OWN_HOSTS` | `http://localhost:8000` / empty | This shortener's own host names: short links may not point to them |
 | `FORWARDED_ALLOW_IPS` | `127.0.0.1` | Behind a reverse proxy: the proxy's IP, so the real client IP is used |
 
@@ -72,29 +102,41 @@ refuses to start without your own.
 ### Services (Docker Compose)
 
 ```mermaid
-flowchart TB
-    client(["Client<br/>browser, curl or Swagger UI"])
+flowchart LR
+    client(["Client<br/>browser, curl, Swagger UI"])
 
     subgraph compose["docker compose"]
-        migrate["migrate<br/>runs alembic upgrade head once, then exits"]
-        app["app<br/>FastAPI on port 8000<br/>(Gunicorn + Uvicorn workers in production)"]
-        db[("db<br/>PostgreSQL 17")]
-        redis[("redis<br/>Redis 8<br/>redirect cache + rate limits")]
-        replica[("db-replica<br/>read-only copy, optional")]
+        app["app (API)<br/>FastAPI on port 8000<br/>Gunicorn + Uvicorn workers in production"]
+        cache[("Redis DB 0<br/>redirect cache<br/>+ rate-limit counters")]
+        broker[("Redis DB 1<br/>Celery broker<br/>(job queue)")]
+        worker["celery-worker<br/>saves clicks,<br/>archives expired URLs"]
+        beat["celery-beat<br/>the clock: 02:00 UTC"]
+        db[("PostgreSQL 17")]
+        migrate["migrate<br/>alembic upgrade head<br/>once, then exits"]
+        replica[("db-replica<br/>read-only, optional")]
     end
 
-    client -->|HTTP requests| app
-    migrate -->|creates and updates the tables| db
-    app -->|reads and writes| db
-    app -->|cached redirects, rate-limit counters| redis
+    client -->|HTTP| app
+    app -->|1. look up short code| cache
+    app -->|2. on a miss: SELECT| db
+    app -->|3. track_click_task.delay| broker
+    broker -->|jobs| worker
+    beat -->|nightly archive job| broker
+    worker -->|INSERT click, click_count + 1,<br/>bulk UPDATE archive| db
+    worker -->|delete archived keys| cache
+    migrate -->|tables| db
     app -.->|read-only queries, when enabled| replica
     db -.->|streaming replication| replica
 ```
 
-- **migrate** runs the database migrations first; the **app** starts only when they succeeded.
-- **redis** caches popular redirects and holds the rate-limit counters (shared by all
-  workers). If Redis is down the app still works: redirects come from the database and the
-  rate limits count in memory.
+- **migrate** runs the database migrations first; the app and the worker start only after it succeeded.
+- **One Redis server, two DB numbers:** DB 0 caches redirects and holds the rate-limit
+  counters; DB 1 is Celery's job queue. Clearing the cache can never delete queued jobs.
+  In production Redis evicts only keys with a TTL (`volatile-lru`), so jobs are never evicted.
+- **celery-worker** takes jobs from the queue: it saves each click and runs the nightly archive.
+- **celery-beat** is the clock: at 02:00 UTC it puts the archive job on the queue. Run exactly one.
+- **Redis down:** redirects still work (read from the database), rate limits count in
+  memory, and clicks are lost (logged). `/health/ready` answers 503.
 - **db-replica** is optional: when enabled, read-only endpoints use it.
 
 ### Inside the app (layers)
@@ -107,6 +149,8 @@ flowchart TB
 | Services | `app/services` | Business rules, ownership checks and the database transaction |
 | Repositories | `app/repositories` | Every SQL query |
 | Models | `app/models` | The database tables (SQLAlchemy) |
+| Cache | `app/cache` | Redis cache-aside for redirects |
+| Worker | `app/worker` | Celery app, tasks (sync SQLAlchemy with psycopg), the click tracker |
 
 ### What happens when someone opens a short link
 
@@ -115,20 +159,30 @@ sequenceDiagram
     autonumber
     actor visitor as Visitor
     participant app as FastAPI app
-    participant redis as Redis
+    participant cache as Redis DB 0 (cache)
     participant db as PostgreSQL
+    participant broker as Redis DB 1 (queue)
+    participant worker as Celery worker
 
     visitor->>app: GET /{short_code}/ (no login needed)
-    app->>redis: look up the short code
-    alt found in Redis
-        redis-->>app: url id and original URL
-    else not in Redis
-        app->>db: find the URL by short code
-        Note over app: unknown code: 404, expired or deleted: 410
+    app->>cache: GET url:redirect:{short_code}
+    alt cache hit (and not expired)
+        cache-->>app: url_id, original URL, expires_at
+    else cache miss, or Redis down
+        app->>db: SELECT the URL by short code
+        Note over app: unknown: 404 / deleted, expired, switched off: 410
+        app->>cache: SET url:redirect:{code} (TTL 15 min, never past the expiry)
     end
-    app->>db: one transaction: save a click and add 1 to click_count
     app-->>visitor: 302 redirect to the original URL
+    Note over app: after the response (background task)
+    app->>broker: track_click_task.delay(url_id, ip, user agent, referrer, time)
+    broker->>worker: the job
+    worker->>db: one transaction: INSERT click + click_count = click_count + 1
 ```
+
+The redirect itself never writes to the database: a cache hit needs no database at all,
+and the click is saved a moment later by the worker (write-behind). **302, not 301:** a
+browser remembers a 301 forever and stops asking us, so later clicks would never be counted.
 
 ## Data model
 
@@ -216,7 +270,16 @@ erDiagram
 | `DELETE` | `/api/v1/urls/{short_code}/` | Soft-delete a URL | Owner or Admin |
 | `GET` | `/api/v1/analytics/{short_code}/` | Click analytics | Premium or Admin; own URLs (Admin: any) |
 | `GET` | `/{short_code}/` | Redirect (302) | Anyone |
-| `GET` | `/health` | Database and cache status | Anyone |
+| `GET` | `/health` | Readiness: PostgreSQL (`SELECT 1`) and Redis (`PING`); `200` or `503` | Anyone |
+| `GET` | `/health/ready` | Same check as `/health` (for load balancers) | Anyone |
+| `GET` | `/health/live` | Liveness: the process answers; checks nothing else (Docker `HEALTHCHECK`) | Anyone |
+
+`GET /health` answers `200` like this, or `503` with `"status": "unhealthy"` and the failing
+part `"down"` (`"disabled"` = not configured, which is fine):
+
+```json
+{"status": "healthy", "database": "ok", "replica": "disabled", "cache": "ok"}
+```
 
 Every error has the same shape:
 
@@ -401,6 +464,32 @@ sequenceDiagram
 | Username | Optional at register, made from the email | The brief's model has no username; the existing table requires one |
 | Tier values | Lower-case `free`, `premium`, `admin` | Kept from the existing database type |
 
+## Module 8 design decisions
+
+The Module 8 brief is written for Django; each part has a FastAPI equivalent:
+`django-redis` -> `redis.asyncio` client created in the app lifespan; Celery + Redis broker
+(same); Gunicorn WSGI -> Gunicorn with `uvicorn_worker.UvicornWorker` (ASGI); JSON logging
+with `logging.config.dictConfig`.
+
+| Decision | What we gain | What we pay |
+|---|---|---|
+| **Cache-aside** for redirects, key `url:redirect:{short_code}`, only `url_id`, URL and expiry | A cache hit needs no database; Redis down = slower, never broken | First visit is always a miss; invalidation is our job |
+| TTL 15 min, **never past the link's expiry**; expiry checked again on read | An expired link is never served from the cache | Short-lived links are cached for less time |
+| Invalidate with a 30 s **tombstone** + `SET NX` (not a plain DELETE) | A slow request cannot write the old target back after a change | For 30 s after a change every visit reads the database |
+| **Write-behind clicks**: the redirect queues `track_click_task` after the response | The visitor never waits for the two writes | `click_count` is a moment behind; clicks are lost (and logged) while the broker is down |
+| Task gets **only simple values** (ids, strings, the click time as text) | JSON-safe; no stale ORM object from another process | The worker reads the database itself |
+| `click_count = click_count + 1` **in SQL** | Two clicks at the same moment both count (no lost update) | — |
+| Retries with backoff + jitter, only for DB connection errors and deadlocks | Survives a database restart | A click may be saved up to ~2 min late |
+| Worker uses a **sync** SQLAlchemy engine (psycopg), statements shared with the API | Celery's normal style; pooled connections per worker process | The same SQL runs on two drivers |
+| Publishing fails fast (no retries, 1 s connect timeout) | A dead broker costs ~1 s in the background, not 6 s | One try per click |
+| Nightly archive: **one bulk UPDATE ... RETURNING**, then clear cache keys | 1095 rows in 0.5 s (measured); a link the owner extends meanwhile is not archived | All matching rows locked for that moment |
+| Archived links still answer `410 url_expired` | The visitor sees the real reason | An owner must send `is_active: true` with a new expiry to revive one |
+| Cache DB 0, broker DB 1; production Redis `volatile-lru` | Clearing or evicting the cache never removes jobs | One server: one memory limit for both |
+| **JSON logs** (own formatter), request id on every line via ContextVars, secrets redacted | Logs can be filtered by field; one request's lines are linked | Harder to read by eye (`LOG_FORMAT=text`) |
+| **Liveness** (`/health/live`) vs **readiness** (`/health`, `/health/ready`) | A database outage never causes a restart storm | Two probes to configure |
+| Redis down -> **not ready (503)** | No traffic while clicks would be lost | A strict load balancer also stops redirects that would work |
+| Gunicorn workers `2 x CPU + 1` (`WEB_CONCURRENCY`), small pool per worker, **start refused** if `workers x (pool + overflow) + Celery` does not fit in `max_connections` | A wrong setting fails at deploy, never at peak traffic | `DB_MAX_CONNECTIONS` must match the server |
+
 ## Known limits
 
 - **Taken email at register:** the person gets the same "OK" and then cannot log in, with no
@@ -412,6 +501,16 @@ sequenceDiagram
 - **Behind a reverse proxy**, set `FORWARDED_ALLOW_IPS` to the proxy's address, or every
   client shares the proxy's IP. HTTPS must be provided by the proxy.
 - **Switching a user off** stops their tokens at once; their short links keep redirecting.
+- **Click counts are a moment behind** the redirect (write-behind); while the broker is down,
+  clicks are lost and each loss is logged. A worker crash in the middle of a task loses
+  that click (Celery's default early acknowledgement: never counted twice).
+- **Redis down slows redirects** by up to ~1 s (the cache's 0.5 s read and write timeouts)
+  until it is back. A circuit breaker (skip Redis for a few seconds after a failure) would
+  remove that.
+- **A URL row removed by hand in the database** (the API only soft-deletes) keeps
+  redirecting from the cache until its TTL ends (at most 15 minutes).
+- **One beat container only:** if it is down at 02:00, that night's archive is skipped; the
+  next run catches up (visitors get `410` for expired links either way).
 
 ## Tests
 
@@ -420,6 +519,11 @@ docker compose up -d db            # the tests need PostgreSQL (Redis for a few 
 pytest                             # run all tests
 pytest --cov                       # with a coverage report (CI requires 98%; it is 100%)
 ```
+
+Celery tasks are tested directly and in eager mode (`task_always_eager`), on a synchronous
+psycopg connection like the real worker; the HTTP tests save clicks with the same SQL
+statements inside the test transaction. The nightly archive is also raced against an
+owner's change on two real database connections.
 
 The suite covers the brief's tests and many attack cases (forged and replayed tokens,
 other users' URLs, mass assignment, the Free limit under concurrent requests on real
@@ -445,9 +549,12 @@ app/
 ├── repositories/   # database queries
 ├── services/       # business logic, ownership checks, transactions
 ├── cache/          # Redis redirect cache
-├── core/           # settings, security, rate limits, errors, logging
+├── core/           # settings, security, rate limits, errors, JSON logging, sizing
 ├── db/             # database connection
+├── worker/         # Celery app, tasks, beat schedule, click tracker
 └── scripts/        # seed data
 alembic/            # database migrations
+docs/learning/      # Module 8 notes and tradeoffs, phase by phase
+gunicorn.conf.py    # production server: workers, timeouts, connection budget
 tests/
 ```
