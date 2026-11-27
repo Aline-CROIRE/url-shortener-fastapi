@@ -55,6 +55,9 @@ six==1.17.0
 tzlocal==5.4.5
 tzdata==2026.6 ; sys_platform == "win32"
 
+# Click geo-location: reads MaxMind .mmdb files (GeoLite2-City), used by the worker
+maxminddb==3.3.0
+
 # Database: SQLAlchemy 2.0 ORM (async) + asyncpg PostgreSQL driver
 SQLAlchemy==2.0.57
 asyncpg==0.32.0
