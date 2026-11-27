@@ -339,3 +339,96 @@ Every worker process has its OWN pool. At the busiest moment:
 | Small pool per worker (3 + 2) | Many workers fit in 100 connections | Under heavy load a request may wait for a free connection (up to 10 s) |
 | `max_requests` recycling | Memory leaks stay bounded | A worker restart now and then (graceful, jittered) |
 | A PgBouncer in front of Postgres (not done) | Thousands of client connections on few server ones | One more service to run |
+
+## Phase 7 — Documentation and final check
+
+**What changed**
+- `README.md`: Celery in the quick start (Docker and local, `--pool=solo` on Windows),
+  useful Docker commands, every new setting, the new architecture diagram (client ->
+  API -> Redis / PostgreSQL, API -> broker -> worker, beat -> worker), the new redirect
+  flow (cache-aside + write-behind), the three health endpoints, "Module 8 design
+  decisions", and the new known limits.
+
+**Final check (2026-11-27)**
+- Clean clone (only tracked files, no `.env`, new volumes, project `m8clean`):
+  `docker compose up --build` -> db, redis healthy; migrate exited 0; app, celery-worker,
+  celery-beat healthy. Register -> login -> create -> 2 redirects -> `click_count` 2 (saved
+  by the worker). `/health/ready` 200.
+- Tests: 919 passed, coverage 100%. `ruff check`, `ruff format --check`, `mypy`: clean.
+
+## Review quiz (10 questions)
+
+Answer in your own words first, then open the answers.
+
+1. Walk through `GET /{short_code}` on a cache hit and on a cache miss. Which steps touch
+   Redis, PostgreSQL and the broker, and in what order?
+2. Why is a redirect cached for at most 15 minutes AND never past the link's `expires_at`?
+   What would go wrong with only one of the two rules?
+3. When the owner updates a link, why does the cache get a 30-second tombstone with
+   `SET NX` instead of a plain `DELETE`? Tell the story of the race in three steps.
+4. Why must `track_click_task` receive ids and strings and never a `URL` object?
+5. Two clicks on the same link arrive at the same moment. Show why
+   `click_count = click_count + 1` in SQL counts both, while "read, add 1, write" loses one.
+6. Which errors does the click task retry, which does it drop, and which does it raise? Why
+   are backoff and jitter used?
+7. The broker is down. What happens to the visitor, to the click, to the logs and to
+   `/health/ready`? Why did we choose not to fall back to writing the click in the request?
+8. Why does the nightly archive put its condition inside one `UPDATE ... WHERE ...` instead
+   of `SELECT`ing the ids first and updating them afterwards?
+9. What is the difference between liveness and readiness? Which one does Docker's
+   `HEALTHCHECK` use here, and what would go wrong with the other one?
+10. With `WEB_CONCURRENCY=8`, `DB_POOL_SIZE=3`, `DB_MAX_OVERFLOW=2` and 2 Celery processes,
+    how many database connections can the app open? Does it fit in `max_connections=100`
+    with 10 reserved? What does Gunicorn do if it does not?
+
+<details>
+<summary>Answers</summary>
+
+1. **Hit:** Redis `GET url:redirect:{code}` -> entry found and not expired -> 302; no
+   database. **Miss:** Redis GET finds nothing -> `SELECT` the URL in PostgreSQL -> 404 /
+   410 / live -> `SET url:redirect:{code} ... EX ttl NX` -> 302. **Both:** after the
+   response, a background task calls `track_click_task.delay(...)` (Redis DB 1, the
+   broker); a worker then writes the click to PostgreSQL.
+2. 15 minutes bounds how long a changed link could be stale if an invalidation is ever
+   missed (e.g. Redis was down during the update). The expiry cap makes sure an expired
+   link is never served from the cache. With only 15 min, a link expiring in 2 minutes
+   would redirect 13 minutes too long; with only the expiry, a link without an expiry
+   could stay cached (and stale) forever. (The read path also checks the expiry.)
+3. (1) A visitor misses the cache and reads the link from the database (still live).
+   (2) The owner deletes it, commits, and invalidates the cache. (3) The visitor now
+   writes what it read in step 1 into the cache: the deleted link would redirect for 15
+   minutes. With a tombstone + `SET NX`, step 3 finds the key already taken and is refused.
+4. The message travels as JSON through Redis (an ORM object cannot be JSON; pickle could
+   run code, so we accept JSON only). The object belongs to a session and connection in
+   the API process; the worker is another process. And it would be a stale copy: by the
+   time the worker runs, the row may have changed. An id lets the worker read fresh data.
+5. Read-modify-write: A reads 41, B reads 41, A writes 42, B writes 42 -> one click lost.
+   In SQL, PostgreSQL locks the row for the UPDATE: B waits for A's commit, then computes
+   42 + 1 = 43. Both count.
+6. Retried: `OperationalError` / `InterfaceError` (database restarting, connection lost,
+   deadlock), up to 5 times, waiting 1, 2, 4, 8, 16 s (backoff) plus randomness (jitter) so
+   that after an outage the retries do not all hit the database at the same moment.
+   Dropped: a foreign-key error (the URL row is gone; retrying cannot help), logged.
+   Raised: anything else (a bug; retrying would repeat it).
+7. The visitor still gets the 302 at once (the click is queued after the response). The
+   one try to publish fails within ~1 s; the click is lost and a WARNING "Click for
+   url_id=... not queued" is logged with the stack trace. `/health/ready` answers 503 (Redis
+   is down), so a load balancer can stop sending traffic. No fallback to a direct database
+   write: during an outage it would put the database back into every redirect, the exact
+   load we moved away, and the code would have two write paths.
+8. With the condition in the UPDATE, PostgreSQL checks it while it locks each row. If the
+   owner is changing a row at that moment, the UPDATE waits for the owner's commit and
+   then checks the WHERE again on the NEW row (READ COMMITTED). A link the owner just
+   extended no longer matches and is not archived. Selecting ids first would use an old
+   snapshot and switch off the freshly extended link. Also: one statement = one round trip.
+9. Liveness: "is the process answering?" - on failure the orchestrator restarts it.
+   Readiness: "can it serve now?" (DB, Redis) - on failure it gets no traffic, no restart.
+   Docker's `HEALTHCHECK` uses `/health/live`. If it used readiness, a database outage
+   would make every app container "unhealthy" and get restarted again and again (a
+   restart storm), which never fixes the database.
+10. 8 x (3 + 2) + 2 x 2 = 44 connections. Budget = 100 - 10 = 90, so it fits. If it did
+    not (e.g. 40 workers: 204), Gunicorn refuses to start (`gunicorn.conf.py` raises
+    `SystemExit` with the calculation), so the mistake shows at deploy time instead of as
+    "too many clients already" at peak traffic.
+
+</details>
