@@ -95,3 +95,23 @@ def test_a_project_without_migrations_is_a_clear_error(monkeypatch: pytest.Monke
             migrations.expected_schema_head()
     finally:
         migrations.expected_schema_head.cache_clear()
+
+
+def test_a_database_without_migrations_is_reported_as_missing(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sqlalchemy.exc import ProgrammingError
+
+    async def no_table(session: object) -> str:
+        # Seen in a real cluster: an empty database (lost its volume) answers fine,
+        # but has no alembic_version table. "down" would send people to the network.
+        raise ProgrammingError(
+            "SELECT version_num FROM alembic_version", {}, Exception("UndefinedTableError")
+        )
+
+    monkeypatch.setattr(health_routes, "current_schema_revision", no_table)
+
+    response = client.get("/health/startup")
+
+    assert response.status_code == 503
+    assert response.json() == {"status": "starting", "database_schema": "missing"}

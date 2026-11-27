@@ -257,3 +257,68 @@ def test_the_service_reaches_the_api_pods() -> None:
 
     assert service["spec"]["selector"].items() <= pod_labels.items()
     assert service["spec"]["ports"][0]["targetPort"] == "http"
+
+
+def test_worker_exposes_its_metrics_for_prometheus() -> None:
+    from app.core.config import Settings
+
+    deployment = get("Deployment", WORKER)
+    worker = container(deployment)
+    port = Settings().worker_metrics_port
+    env = {item["name"]: item["value"] for item in worker["env"]}
+
+    assert {"name": "metrics", "containerPort": port} in worker["ports"]
+    assert env["PROMETHEUS_MULTIPROC_DIR"].startswith("/tmp/")  # /tmp is the writable volume
+    annotations = deployment["spec"]["template"]["metadata"]["annotations"]
+    assert annotations["prometheus.io/scrape"] == "true"
+    assert annotations["prometheus.io/port"] == str(port)
+
+
+def test_worker_command_prepares_the_metrics_folder_then_becomes_celery() -> None:
+    command = container(get("Deployment", WORKER))["command"]
+
+    assert command[:2] == ["sh", "-c"]
+    script = command[2]
+    assert script.index('mkdir -p "$PROMETHEUS_MULTIPROC_DIR"') < script.index("exec celery")
+    assert "--concurrency=$(CELERY_CONCURRENCY)" in script  # filled in by Kubernetes
+
+
+def test_worker_pod_downloads_fresh_geoip_data_without_depending_on_it() -> None:
+    spec = get("Deployment", WORKER)["spec"]["template"]["spec"]
+    [init] = spec["initContainers"]
+    worker = container(get("Deployment", WORKER))
+    env = {item["name"]: item["value"] for item in worker["env"]}
+
+    script = " ".join(init["command"])
+    assert "app.scripts.download_geoip" in script
+    # No internet in the cluster? Clicks just have no location: the worker must start
+    assert "|| " in script
+    assert env["GEOIP_DATABASE_PATH"] == "/geoip/dbip-city-lite.mmdb"
+    mounts = {m["name"]: m for m in worker["volumeMounts"]}
+    assert mounts["geoip"]["mountPath"] == "/geoip"
+    assert mounts["geoip"]["readOnly"] is True  # the worker only reads it
+    assert init["securityContext"]["readOnlyRootFilesystem"] is True
+
+
+@pytest.mark.parametrize("name", [API, WORKER])
+def test_a_hung_container_is_killed_quickly(name: str) -> None:
+    deployment = get("Deployment", name)
+    live = container(deployment)["livenessProbe"]
+    normal = deployment["spec"]["template"]["spec"]["terminationGracePeriodSeconds"]
+
+    # Seen in kind: a frozen process ignores SIGTERM, so a liveness kill waited the full
+    # 45 s grace period. A probe-level grace period (Kubernetes 1.25+) keeps 45 s for
+    # normal shutdowns but kills a hung container after 10 s.
+    assert live["terminationGracePeriodSeconds"] <= 10 < normal
+
+
+def test_the_kind_test_database_keeps_its_data() -> None:
+    infra = list(yaml.safe_load_all((ROOT / "deploy" / "kind" / "infra.yaml").read_text()))
+    [claim] = [r for r in infra if r["kind"] == "PersistentVolumeClaim"]
+    [db] = [r for r in infra if r["kind"] == "Deployment" and r["metadata"]["name"] == "db"]
+    spec = db["spec"]["template"]["spec"]
+
+    # Seen in kind: without a volume, "database down and up again" = an EMPTY database
+    [volume] = spec["volumes"]
+    assert volume["persistentVolumeClaim"]["claimName"] == claim["metadata"]["name"]
+    assert db["spec"]["strategy"]["type"] == "Recreate"  # one pod owns the volume at a time

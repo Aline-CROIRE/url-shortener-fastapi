@@ -170,3 +170,46 @@ def test_production_redis_never_evicts_queued_jobs() -> None:
     # queued job; volatile-lru only removes keys with a TTL (cache entries).
     assert "volatile-lru" in command
     assert "allkeys-lru" not in command
+
+
+@pytest.mark.parametrize("compose_file", ["docker-compose.yml", "docker-compose.prod.yml"])
+def test_worker_has_a_multiprocess_metrics_folder(compose_file: str) -> None:
+    env = load_compose(compose_file)["services"]["celery-worker"]["environment"]
+
+    # Set BEFORE Python starts: the pool's child processes inherit the metrics client
+    assert env["PROMETHEUS_MULTIPROC_DIR"].startswith("/tmp/")
+
+
+def test_local_prometheus_scrapes_the_api_and_the_worker() -> None:
+    config = yaml.safe_load((ROOT / "docker" / "prometheus" / "prometheus.yml").read_text())
+    targets = {
+        target
+        for job in config["scrape_configs"]
+        for static in job["static_configs"]
+        for target in static["targets"]
+    }
+
+    assert {"app:8000", "celery-worker:9808"} <= targets
+
+
+@pytest.mark.parametrize("compose_file", ["docker-compose.yml", "docker-compose.prod.yml"])
+def test_worker_command_prepares_the_metrics_folder_then_becomes_celery(compose_file: str) -> None:
+    raw = load_compose(compose_file)["services"]["celery-worker"]["command"]
+    command = raw.replace("$$", "$")  # what compose hands to the shell ($$ = literal $)
+
+    # Folder (re)created BEFORE Python starts; "exec": Celery becomes PID 1 and gets
+    # the stop signal itself (warm shutdown: running tasks finish)
+    prepare = command.index('mkdir -p "$PROMETHEUS_MULTIPROC_DIR"')
+    assert 'rm -rf "$PROMETHEUS_MULTIPROC_DIR"' in command
+    assert command.index("exec celery") > prepare
+
+
+@pytest.mark.parametrize("compose_file", ["docker-compose.yml", "docker-compose.prod.yml"])
+def test_worker_uses_the_downloaded_geoip_file_by_default(compose_file: str) -> None:
+    worker = load_compose(compose_file)["services"]["celery-worker"]
+
+    # "python -m app.scripts.download_geoip" saves it there; the folder is mounted read-only
+    assert worker["environment"]["GEOIP_DATABASE_PATH"].endswith(
+        ":-/app/geoip/dbip-city-lite.mmdb}"
+    )
+    assert "./geoip:/app/geoip:ro" in worker["volumes"]
