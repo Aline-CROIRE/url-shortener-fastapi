@@ -45,14 +45,22 @@ services:
   # No hot reload: after changing a task, run "docker compose restart celery-worker".
   celery-worker:
     build: .
-    command: celery -A app.worker.celery_app:celery_app worker --loglevel=INFO --concurrency=2
+    # Empty + create the metrics folder BEFORE Python starts (prometheus_client writes its
+    # files as soon as a metric is defined); "exec": Celery becomes PID 1 and gets the
+    # stop signal itself. $$ = a literal $ for the shell (compose would read ${...} itself).
+    command: >-
+      sh -c 'rm -rf "$$PROMETHEUS_MULTIPROC_DIR" && mkdir -p "$$PROMETHEUS_MULTIPROC_DIR"
+      && exec celery -A app.worker.celery_app:celery_app worker --loglevel=INFO --concurrency=2'
     env_file:
       - path: .env
         required: false # same settings as the app (environment below wins)
     environment:
       <<: *app-environment
-      # Optional click geo-location: a GeoLite2-City file placed in ./geoip/
-      GEOIP_DATABASE_PATH: ${GEOIP_DATABASE_PATH:-}
+      # Click geo-location: python -m app.scripts.download_geoip saves DB-IP City Lite
+      # into ./geoip/ (free, no account). Missing file = clicks without a location.
+      GEOIP_DATABASE_PATH: ${GEOIP_DATABASE_PATH:-/app/geoip/dbip-city-lite.mmdb}
+      # Worker metrics on port 9808 (multiprocess: the pool's children write here)
+      PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus-worker
     volumes:
       - ./app:/app/app
       - ./geoip:/app/geoip:ro # read-only; the .mmdb file is never committed

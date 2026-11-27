@@ -1,0 +1,101 @@
+# LOCAL TEST CLUSTER ONLY (kind): PostgreSQL and Redis inside the cluster.
+# In production these are managed services; deploy/k8s does not contain them.
+# The password below is a throwaway for a cluster that lives on your machine for minutes.
+#
+# The data lives on a volume (kind's default storage): without it, stopping and starting
+# the database gives an EMPTY database (learned the hard way in the failover test).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: db-data
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: db
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate # the volume can be used by one pod at a time
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: test-postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: test-postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:17-alpine
+          env:
+            - name: POSTGRES_USER
+              value: postgres
+            - name: POSTGRES_PASSWORD
+              value: kind-test-only
+            - name: POSTGRES_DB
+              value: url_shortener
+          ports:
+            - containerPort: 5432
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-d", "url_shortener"]
+            periodSeconds: 3
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+              subPath: pgdata # PostgreSQL wants an empty folder, not the volume's root
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: db-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: db
+spec:
+  selector:
+    app.kubernetes.io/name: test-postgres
+  ports:
+    - port: 5432
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: test-redis
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: test-redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:8-alpine
+          args: ["--maxmemory", "128mb", "--maxmemory-policy", "volatile-lru"]
+          ports:
+            - containerPort: 6379
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            periodSeconds: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+spec:
+  selector:
+    app.kubernetes.io/name: test-redis
+  ports:
+    - port: 6379

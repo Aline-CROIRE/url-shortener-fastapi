@@ -41,12 +41,18 @@ services:
   # Runs the background jobs taken from the queue (same image as the app)
   celery-worker:
     build: .
-    command: celery -A app.worker.celery_app:celery_app worker --loglevel=INFO --concurrency=${CELERY_CONCURRENCY:-2}
+    # Metrics folder ready before Python starts; exec = Celery is PID 1 (see docker-compose.yml)
+    command: >-
+      sh -c 'rm -rf "$$PROMETHEUS_MULTIPROC_DIR" && mkdir -p "$$PROMETHEUS_MULTIPROC_DIR"
+      && exec celery -A app.worker.celery_app:celery_app worker --loglevel=INFO
+      --concurrency=${CELERY_CONCURRENCY:-2}'
     environment:
       <<: *app-environment
-      GEOIP_DATABASE_PATH: ${GEOIP_DATABASE_PATH:-}  # e.g. /app/geoip/GeoLite2-City.mmdb
+      # python -m app.scripts.download_geoip (DB-IP City Lite) or your GeoLite2-City file
+      GEOIP_DATABASE_PATH: ${GEOIP_DATABASE_PATH:-/app/geoip/dbip-city-lite.mmdb}
+      PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus-worker  # worker metrics on port 9808
     volumes:
-      - ./geoip:/app/geoip:ro  # optional GeoLite2-City file (licensed data: never in git or the image)
+      - ./geoip:/app/geoip:ro  # GeoIP data file (downloaded, never in git or the image)
     healthcheck:
       test: ["CMD-SHELL", "celery -A app.worker.celery_app:celery_app inspect ping -d celery@$$HOSTNAME --timeout 5"]
       interval: 30s

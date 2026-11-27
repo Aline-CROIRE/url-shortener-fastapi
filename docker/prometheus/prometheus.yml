@@ -15,3 +15,9 @@ scrape_configs:
     # With METRICS_TOKEN set, Prometheus must send it:
     # authorization:
     #   credentials: <METRICS_TOKEN>
+
+  # The Celery worker's own metrics: tasks (success/retry/failure), clicks saved/dropped,
+  # URLs archived. Try: sum by (outcome) (rate(celery_tasks_total[5m]))
+  - job_name: url-shortener-worker
+    static_configs:
+      - targets: ["celery-worker:9808"]

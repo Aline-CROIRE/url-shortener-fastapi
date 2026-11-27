@@ -59,6 +59,9 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 3
             failureThreshold: 3
+            # A HUNG process ignores SIGTERM: kill it after 10 s, not the pod's 45 s
+            # (those stay for normal shutdowns). Seen in kind: 46 s without this.
+            terminationGracePeriodSeconds: 10
           # READINESS: "can it serve now?" (PostgreSQL + Redis). 2 failures x 5 s =
           # no traffic until it passes again; nothing restarts.
           readinessProbe:

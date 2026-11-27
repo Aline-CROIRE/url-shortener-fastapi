@@ -12,30 +12,72 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: url-shortener-worker
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: /metrics
+        prometheus.io/port: "9808"
     spec:
       terminationGracePeriodSeconds: 60 # let a running task finish (warm shutdown)
       securityContext:
         runAsNonRoot: true
         runAsUser: 999
         runAsGroup: 999
+      # Runs before the worker, at every pod start: fresh DB-IP City Lite data (free,
+      # CC BY 4.0), nothing licensed in the image. "|| echo": no internet in the
+      # cluster must not stop the worker; clicks then simply have no location.
+      initContainers:
+        - name: geoip-download
+          image: url-shortener:0.1.0
+          command:
+            - sh
+            - -c
+            - >-
+              python -m app.scripts.download_geoip --dest /geoip
+              || echo "GeoIP download failed: clicks are saved without a location"
+          resources:
+            requests: {cpu: 100m, memory: 64Mi}
+            limits: {memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: geoip
+              mountPath: /geoip
       containers:
         - name: worker
           image: url-shortener:0.1.0
+          # Empty + create the metrics folder BEFORE Python starts (prometheus_client writes
+          # its files as soon as a metric is defined; /tmp survives container restarts in
+          # the pod). "exec": Celery is PID 1 and gets the stop signal itself (warm shutdown).
+          # $(CELERY_CONCURRENCY) is filled in by Kubernetes from the ConfigMap.
           command:
-            - celery
-            - -A
-            - app.worker.celery_app:celery_app
-            - worker
-            - --loglevel=INFO
-            - --concurrency=$(CELERY_CONCURRENCY) # Kubernetes fills it in from the ConfigMap
+            - sh
+            - -c
+            - >-
+              rm -rf "$PROMETHEUS_MULTIPROC_DIR" && mkdir -p "$PROMETHEUS_MULTIPROC_DIR"
+              && exec celery -A app.worker.celery_app:celery_app worker --loglevel=INFO
+              --concurrency=$(CELERY_CONCURRENCY)
+          ports:
+            - name: metrics # the worker's own Prometheus metrics (WORKER_METRICS_PORT)
+              containerPort: 9808
+          env:
+            # Multiprocess metrics: the pool's child processes write here (/tmp is writable)
+            - name: PROMETHEUS_MULTIPROC_DIR
+              value: /tmp/prometheus-worker
+            # Downloaded by the init container (a missing file = no location, no error)
+            - name: GEOIP_DATABASE_PATH
+              value: /geoip/dbip-city-lite.mmdb
           envFrom:
             - configMapRef:
                 name: url-shortener-config
             - secretRef:
                 name: url-shortener-secrets
+          # The ~130 MB GeoIP file is memory-mapped: its pages count toward the limit
           resources:
-            requests: {cpu: 250m, memory: 256Mi}
-            limits: {memory: 512Mi}
+            requests: {cpu: 250m, memory: 384Mi}
+            limits: {memory: 768Mi}
           # LIVENESS: the worker answers "ping" through the broker. Heavier than an
           # HTTP check (it starts Python), so every 60 s. No readiness: no traffic.
           livenessProbe:
@@ -48,6 +90,8 @@ spec:
             periodSeconds: 60
             timeoutSeconds: 20
             failureThreshold: 3
+            # A hung worker ignores SIGTERM: kill it after 10 s, not the pod's 60 s
+            terminationGracePeriodSeconds: 10
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -56,6 +100,12 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            - name: geoip
+              mountPath: /geoip
+              readOnly: true # the worker only reads the database
       volumes:
         - name: tmp
           emptyDir: {}
+        - name: geoip
+          emptyDir:
+            sizeLimit: 256Mi # the file is ~130 MB (plus room for the next one)
