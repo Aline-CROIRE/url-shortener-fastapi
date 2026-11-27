@@ -827,3 +827,76 @@ schema is current; the old pods keep serving meanwhile.
     request; confirmed by timing `localhost` (0.52 s timeout) vs `127.0.0.1` (0.01 s).
 
 </details>
+
+## Phase 15 — Closing the gaps found in the final review
+
+### Worker metrics
+
+The Celery worker now serves its own Prometheus metrics on port 9808:
+`celery_tasks_total{task, outcome}`, `celery_task_duration_seconds{task}`,
+`clicks_saved_total{outcome}`, `urls_archived_total`. Counted with Celery's
+`task_prerun` / `task_postrun` signals and in the tasks themselves.
+
+**A bug the tests missed and the live run found.** The worker crashed at start:
+`FileNotFoundError: /tmp/prometheus-worker/counter_1.db`. In multiprocess mode
+prometheus_client creates its file the moment a metric is DEFINED (at import), so the
+folder must exist before Python starts; the code created it later. The tests always
+used a folder that already existed. Fix: the container command does
+`rm -rf "$DIR" && mkdir -p "$DIR" && exec celery ...` (compose and Kubernetes), and the
+code no longer deletes files (the main process already has its own open). A new test
+reproduces the crash in a fresh Python process. `exec` also makes Celery PID 1, so it
+receives the stop signal itself and lets running tasks finish.
+
+Also learned: Celery's `worker_init` fires before logging is set up (the "metrics on
+port" line was lost); the server now starts on `worker_ready`.
+
+Seen live: 12 redirects -> worker metrics `clicks_saved_total{saved} 12`, 12 successful
+click tasks, 1 archive run with 2 URLs; Prometheus target `url-shortener-worker` up.
+
+### Real click locations without an account (DB-IP City Lite)
+
+`python -m app.scripts.download_geoip` downloads DB-IP's free monthly City Lite database
+(CC BY 4.0, no account; same .mmdb format as GeoLite2) into `./geoip/`. It falls back to
+last month's file early in a month, checks that the download opens as a City database,
+and only then swaps it in with one atomic rename: a broken download never replaces a
+working file. Compose points the worker at it by default; in Kubernetes an init container
+runs the same script at every pod start ("|| echo": no internet must not stop the worker).
+Credit "IP Geolocation by DB-IP" is in the README and the analytics API docs.
+
+Seen live: `GET /api/v1/analytics/{code}/` -> RW 2 (Kigali), US 1 (Mountain View),
+AU 1 (Sydney), Unknown 1 (a private address). Also seen: clicks sent with a wrong url_id
+(a parsing mistake in my check) were dropped by the worker with "the URL no longer exists",
+as designed, instead of failing or retrying forever.
+
+| Choice | Gain | Cost |
+|---|---|---|
+| DB-IP Lite by default, GeoLite2 still possible | Works without any account | A bit less precise than GeoLite2 (cities approximate) |
+| Download script (stdlib only), validated + atomic swap | Safe to run any time, also from cron | ~130 MB per month |
+| Init container in Kubernetes | Fresh data per pod, nothing licensed in the image | Needs internet from the cluster (optional: falls back to "Unknown") |
+
+### A real Kubernetes cluster (kind)
+
+The manifests ran on a real cluster (kind, Kubernetes v1.37) with a test PostgreSQL and
+Redis (`deploy/kind/infra.yaml`). Every failure was caused on purpose:
+
+| Test | What happened |
+|---|---|
+| Deploy | Startup probe failed while the migration Job ran, then passed: 0 restarts |
+| Database down / up | Not ready in 7 s, Service had no endpoints, 0 restarts, ready 9 s after; data kept |
+| API pod frozen | Liveness killed and restarted it; the other pod kept serving |
+| Rolling update under load | 945 requests, 0 failed |
+| Beat restart | Never two beats (Recreate) |
+| Archive in the cluster | 1 URL archived, 410 `url_expired`, metric `urls_archived_total 1` |
+
+**What the cluster taught (each fixed and tested)**
+1. **A hung process ignores SIGTERM**, so the liveness kill waited the pod's full 45 s
+   grace period (restart after 77 s). A probe-level `terminationGracePeriodSeconds: 10`
+   (Kubernetes 1.25+) kills hung containers fast and keeps 45 s for normal shutdowns.
+   After the fix: restarted after 35 s, ready after 42 s.
+2. **The test database had no volume**: "down and up" gave an EMPTY database, and the
+   restarted pod could never start. Now a PersistentVolumeClaim (+ `Recreate`).
+3. **"down" was the wrong word** for a database that answers but has no migrations:
+   the startup check now says "missing" (a different fix: run the migrations).
+4. **Readiness must NOT check the schema version**: during a rolling deploy the
+   migration runs first, and old pods would all drop out at once. Only the startup probe
+   compares versions; readiness checks that the database and Redis answer.

@@ -42,6 +42,8 @@ docker compose exec celery-worker celery -A app.worker.celery_app:celery_app cal
 docker compose exec celery-worker celery -A app.worker.celery_app:celery_app inspect registered
 docker compose exec redis redis-cli -n 0 --scan --pattern 'url:redirect:*'   # cached redirects
 docker compose --profile monitoring up -d prometheus   # metrics UI: http://localhost:9090
+python -m app.scripts.download_geoip                   # click locations (monthly), then:
+docker compose up -d celery-worker
 # traces: start Jaeger, then the app and worker with tracing on (UI: http://localhost:16686)
 docker compose --profile tracing up -d jaeger
 OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318 docker compose up -d app celery-worker
@@ -91,7 +93,7 @@ Settings are read from environment variables (or `.env`); see [.env.example](.en
 | `REDIS_URL` | empty | Redis **DB 0**: the redirect cache and the rate limits. Empty = no cache |
 | `CACHE_TTL_SECONDS` | `900` | Longest time a redirect stays cached (never past the link's expiry) |
 | `CELERY_BROKER_URL` | `redis://127.0.0.1:6379/1` | Celery's job queue: Redis **DB 1**. Must differ from the cache's DB |
-| `GEOIP_DATABASE_PATH` | empty | MaxMind GeoLite2-City file: the worker saves each click's country and city. Empty = "Unknown". See [geoip/README.md](geoip/README.md) |
+| `GEOIP_DATABASE_PATH` | Docker: `/app/geoip/dbip-city-lite.mmdb` | City database for click locations; get it with `python -m app.scripts.download_geoip` (free DB-IP City Lite, no account). Missing = "Unknown". See [geoip/README.md](geoip/README.md) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | empty | Where traces go (OTLP/HTTP), e.g. `http://jaeger:4318`. Empty = tracing off |
 | `OTEL_SERVICE_NAME` / `OTEL_TRACES_SAMPLER_RATIO` | `url-shortener` / `1.0` | Name in the tracing UI (`-api`, `-worker`); share of traces kept |
 | `METRICS_TOKEN` | empty | When set, `GET /metrics` needs `Authorization: Bearer <token>` |
@@ -130,11 +132,12 @@ flowchart LR
     end
 
     client -->|HTTP| app
-    app -->|1. look up short code| cache
-    app -->|2. on a miss: SELECT| db
-    app -->|3. track_click_task.delay| broker
+    app -->|step 1: look up short code| cache
+    app -->|step 2, on a miss: SELECT| db
+    app -->|step 3: track_click_task.delay| broker
     broker -->|jobs| worker
     beat -->|nightly archive job| broker
+    beat -.->|schedules jobs for, via the queue| worker
     worker -->|INSERT click, click_count + 1,<br/>bulk UPDATE archive| db
     worker -->|delete archived keys| cache
     migrate -->|tables| db
@@ -291,7 +294,7 @@ erDiagram
 | `GET` | `/health` | Readiness: PostgreSQL (`SELECT 1`) and Redis (`PING`); `200` or `503` | Anyone |
 | `GET` | `/health/ready` | Same check as `/health` (for load balancers) | Anyone |
 | `GET` | `/metrics` | Prometheus metrics (not in Swagger); see below | Prometheus (`METRICS_TOKEN` if set) |
-| `GET` | `/health/startup` | Startup: PostgreSQL answers and its schema is at the newest migration (Kubernetes `startupProbe`) | Anyone |
+| `GET` | `/health/startup` | Startup: PostgreSQL answers and its schema is at the newest migration (`current` / `outdated` / `missing` / `down`; Kubernetes `startupProbe`) | Anyone |
 | `GET` | `/health/live` | Liveness: the process answers; checks nothing else (Docker `HEALTHCHECK`) | Anyone |
 
 `GET /health` answers `200` like this, or `503` with `"status": "unhealthy"` and the failing
@@ -325,6 +328,15 @@ Every error has the same shape:
 | `http_requests_in_progress` | gauge | `method` | How busy the workers are right now |
 | `redirect_cache_lookups_total` | counter | `result` = hit / miss / error | Cache hit ratio; Redis errors |
 | `click_events_total` | counter | `outcome` = queued / lost | Lost clicks (alert when > 0) |
+| `celery_tasks_total` | counter | `task`, `outcome` = success / retry / failure | Worker health; a rising retry rate = the database struggles |
+| `celery_task_duration_seconds` | histogram | `task` | How long clicks and the archive take in the worker |
+| `clicks_saved_total` | counter | `outcome` = saved / dropped | Clicks really written (vs queued above) |
+| `urls_archived_total` | counter | - | What the nightly archive switched off |
+
+The last four come from the **Celery worker**, on its own port (`WORKER_METRICS_PORT`, 9808),
+also in multiprocess mode: the pool's child processes run the tasks, its main process
+serves the sum. The folder (`PROMETHEUS_MULTIPROC_DIR`) is created by the container command
+BEFORE Python starts, because prometheus_client writes its files as soon as a metric exists.
 
 `route` is the route **template** (`/{short_code}`), never the real path, and unknown paths
 are `unmatched`: one series per route instead of one per short code. Under Gunicorn every
@@ -394,6 +406,37 @@ and a 45 s grace period let Gunicorn finish requests; `WEB_CONCURRENCY` is set e
 with a read-only root filesystem, no privilege escalation and no capabilities. Checked by
 `tests/test_kubernetes.py` (probes called for real, the connection math) and by kubeconform
 in CI. The image was also run like this (read-only root, user 999): all probes 200.
+
+### Try it on a local cluster (kind)
+
+[kind](https://kind.sigs.k8s.io) runs a real Kubernetes cluster as Docker containers;
+`deploy/kind/infra.yaml` adds a test PostgreSQL (with a volume) and Redis.
+
+```bash
+kind create cluster --name m8
+docker build -t url-shortener:0.1.0 . && kind load docker-image url-shortener:0.1.0 --name m8
+kubectl apply -f deploy/kind/infra.yaml
+kubectl create secret generic url-shortener-secrets   --from-literal=DATABASE_URL='postgresql+asyncpg://postgres:kind-test-only@db:5432/url_shortener'   --from-literal=JWT_SECRET_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"   --from-literal=METRICS_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+kubectl apply -k deploy/k8s
+kubectl port-forward service/url-shortener-api 8080:80     # http://localhost:8080/docs
+kind delete cluster --name m8                               # when done
+```
+
+Tested this way (Kubernetes v1.37, 2026-11-27):
+
+| Test | Result |
+|---|---|
+| Deploy (migration Job + API, worker, beat) | All running, 0 restarts; the startup probe held the API pods back until the migration finished; the worker's init container downloaded the GeoIP data |
+| User journey through the Service | Register, login, create, 4 redirects -> `click_count` 4; `/metrics` 401 without the token |
+| Database stopped, then started | API pods not ready within 7 s, the Service sent no traffic, **0 restarts**; ready again 9 s after; data kept |
+| One API pod frozen (hung process) | Liveness failed, killed and restarted after 35 s, ready after 42 s; the other pod served meanwhile |
+| Rolling update under continuous traffic | **945 requests, 0 failed** |
+| Beat restarted | Never more than one beat pod (96 samples) |
+| Nightly archive run in the cluster | "Archived 1 expired URLs", the link then answers 410 `url_expired` |
+
+The cluster tests found three things that are now fixed: the liveness grace period
+(a hung pod waited 46 s to be killed, now 10 s), the startup check reporting an empty
+database as "down" (now "missing"), and the test database losing its data (now a volume).
 
 ## Authentication
 
@@ -604,6 +647,12 @@ with `logging.config.dictConfig`.
 | Worker recycling rare (`max_requests` 10,000), measured: no leak; Gunicorn `threads` unused (Uvicorn workers), AnyIO pool `THREAD_POOL_SIZE` | Load test: 0 errors instead of 8 resets, p99 290 ms instead of 710 ms | A real leak would grow longer before a restart |
 | Gunicorn workers `2 x CPU + 1` (`WEB_CONCURRENCY`), small pool per worker, **start refused** if `workers x (pool + overflow) + Celery` does not fit in `max_connections` | A wrong setting fails at deploy, never at peak traffic | `DB_MAX_CONNECTIONS` must match the server |
 
+## Credits
+
+IP geolocation by [DB-IP](https://db-ip.com) (IP to City Lite, licensed under
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)). Tests use MaxMind's public test
+database (MIT / Apache-2.0, see [tests/data/NOTICE.txt](tests/data/NOTICE.txt)).
+
 ## Known limits
 
 - **Taken email at register:** the person gets the same "OK" and then cannot log in, with no
@@ -626,6 +675,9 @@ with `logging.config.dictConfig`.
 - **Running the app outside Docker on Windows:** use `127.0.0.1`, not `localhost`, in
   `REDIS_URL`. `localhost` tries IPv6 first, Docker only listens on IPv4, and every cache
   call then waits for its 0.5 s timeout (the cache looks down).
+- **Click locations come from the visitor's IP:** visits from a private network (your own
+  machine, `localhost`, Docker) are "Unknown"; cities are approximate (DB-IP Lite), countries
+  are reliable. Refresh the data monthly with `python -m app.scripts.download_geoip`.
 - **One beat container only:** if it is down at 02:00, that night's archive is skipped; the
   next run catches up (visitors get `410` for expired links either way).
 
@@ -672,6 +724,7 @@ app/
 └── scripts/        # seed data
 alembic/            # database migrations
 deploy/k8s/         # Kubernetes manifests (kubectl apply -k deploy/k8s)
+deploy/kind/        # test-only PostgreSQL + Redis for a local kind cluster
 docs/learning/      # Module 8 notes, tradeoffs, profiling and load test results
 loadtest/           # Locust load test (runs in Locust's Docker image)
 gunicorn.conf.py    # production server: workers, timeouts, connection budget
