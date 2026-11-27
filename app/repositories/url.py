@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
-from sqlalchemy import Select, exists, func, literal, or_, select, tuple_, update
+from sqlalchemy import Select, Update, exists, func, literal, or_, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute, joinedload, selectinload
 
@@ -244,7 +244,8 @@ class URLRepository:
         await self._session.flush()
         return url
 
-    async def increment_click_count(self, url_id: int) -> None:
+    @staticmethod
+    def increment_click_count_statement(url_id: int) -> Update:
         """Add 1 INSIDE the database: UPDATE urls SET click_count = click_count + 1.
 
         Postgres reads and writes the value in one step under a row lock, so two
@@ -253,12 +254,15 @@ class URLRepository:
 
         updated_at keeps its value: a visit is not an edit. Without it, the
         onupdate=now() of TimestampMixin would set updated_at on every click.
+
+        A statement, not a method that runs it: the Celery worker runs it on a
+        SYNC session (app/worker/tasks.py), the same SQL as on an async one.
         """
-        await self._session.execute(
+        return (
             update(URL)
             .where(URL.id == url_id)
             .values(click_count=URL.click_count + 1, updated_at=URL.updated_at)
-            # the URL object in this session may be stale now; don't try to
+            # a URL object in the session may be stale now; don't try to
             # recompute it in Python, just leave it for a fresh read if needed
             .execution_options(synchronize_session=False)
         )

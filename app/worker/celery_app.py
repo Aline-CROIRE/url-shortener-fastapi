@@ -11,7 +11,8 @@ from app.core.config import get_settings
 
 def create_celery_app(broker_url: str) -> Celery:
     """Create the Celery app that sends jobs to (and reads them from) the broker."""
-    celery = Celery("url_shortener", broker=broker_url)
+    # include: the modules the worker imports at startup to know the tasks
+    celery = Celery("url_shortener", broker=broker_url, include=["app.worker.tasks"])
     celery.conf.update(
         # JSON only: a "pickle" message could run any code inside the worker
         task_serializer="json",
@@ -23,6 +24,15 @@ def create_celery_app(broker_url: str) -> Celery:
         enable_utc=True,
         # The worker keeps trying to reach Redis at startup instead of crashing
         broker_connection_retry_on_startup=True,
+        # SENDING a job (the API): one quick try. Celery's default keeps
+        # reconnecting for seconds; a click is not worth that (measured: 6.4 s ->
+        # 1 s with a dead broker). The worker has its own reconnect settings.
+        task_publish_retry=False,
+        broker_transport_options={
+            "max_retries": 0,  # no reconnect loop when opening the connection
+            "socket_connect_timeout": 1,  # seconds to wait for Redis to accept
+            "socket_timeout": 5,  # seconds to wait for an answer from Redis
+        },
     )
     return celery
 

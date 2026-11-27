@@ -3,9 +3,15 @@
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
 UNIQUE_VIOLATION = "23505"  # PostgreSQL error code (SQLSTATE) for a duplicate unique value
+FOREIGN_KEY_VIOLATION = "23503"  # the referenced row does not exist
 # Postgres cancelled the transaction only because of other transactions running at the
 # same moment; nothing was saved, so the same request can safely be sent again
 RETRYABLE_SQLSTATES = frozenset({"40P01", "40001"})  # deadlock, serialization failure
+
+
+def is_foreign_key_violation(exc: IntegrityError) -> bool:
+    """Return True if a referenced row does not exist (e.g. a click for a missing URL)."""
+    return getattr(exc.orig, "sqlstate", None) == FOREIGN_KEY_VIOLATION
 
 
 def is_retryable(exc: DBAPIError) -> bool:

@@ -17,6 +17,12 @@ REDIS_SCHEMES = ("redis://", "rediss://")
 RATE_LIMIT_STORAGE_SCHEMES = ("memory://", *REDIS_SCHEMES)
 
 
+def to_sync_url(database_url: str) -> str:
+    """Return the same database address with the synchronous psycopg driver."""
+    url = make_url(database_url).set(drivername="postgresql+psycopg")
+    return url.render_as_string(hide_password=False)
+
+
 def redis_target(url: str) -> tuple[str, int, str]:
     """Return (host, port, DB number) of a Redis URL; no number means DB "0"."""
     parts = urlsplit(url)
@@ -188,8 +194,7 @@ class Settings(BaseSettings):
     @property
     def sync_database_url(self) -> str:
         """Return DATABASE_URL with the synchronous psycopg driver (for the Celery worker)."""
-        url = make_url(self.database_url).set(drivername="postgresql+psycopg")
-        return url.render_as_string(hide_password=False)
+        return to_sync_url(self.database_url)
 
     @property
     def rate_limit_storage(self) -> str:
