@@ -1,5 +1,9 @@
-"""Health probes: is the process alive (liveness), and can it serve requests (readiness)?
+"""Health probes (Kubernetes' three): has it started, is it alive, can it serve requests?
 
+STARTUP   /health/startup "Has this instance finished starting?" PostgreSQL answers and
+                         its schema is at the newest migration. Until it passes, the
+                         orchestrator neither checks liveness nor sends traffic, so a slow
+                         start is not mistaken for a hang.
 LIVENESS  /health/live   "Is the process still answering?" Checks nothing else.
                          If it fails, the orchestrator (Docker, Kubernetes) RESTARTS
                          the container. It must not check the database: restarting
@@ -23,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.dependencies import DbSession, ReadDbSession, RedirectCacheDep, SettingsDep
 from app.cache import RedirectCache
 from app.db.database import ping_database
+from app.db.migrations import current_schema_revision, expected_schema_head
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +86,48 @@ async def cache_is_up(cache: RedirectCache) -> bool | None:
 
 READY_EXAMPLE = {"status": "healthy", "database": "ok", "replica": "ok", "cache": "ok"}
 NOT_READY_EXAMPLE = {"status": "unhealthy", "database": "ok", "replica": "ok", "cache": "down"}
+
+
+SCHEMA_STATUS_DOWN = "down"
+
+
+async def schema_status(db: AsyncSession) -> str:
+    """Return "current", "outdated" (migrations not applied yet) or "down"."""
+    try:
+        revision = await within_timeout(current_schema_revision(db))
+    except CHECK_ERRORS:
+        logger.warning("Startup check: database not reachable", exc_info=True)
+        return SCHEMA_STATUS_DOWN
+    return "current" if revision == expected_schema_head() else "outdated"
+
+
+@router.get(
+    "/health/startup",
+    summary="Startup probe",
+    description=(
+        "200 once this instance can start serving: PostgreSQL answers and its schema is "
+        "at the newest migration. Until then Kubernetes neither checks liveness nor "
+        "sends traffic."
+    ),
+    responses={
+        status.HTTP_503_SERVICE_UNAVAILABLE: {
+            "description": "Still starting: database down, or migrations not applied yet",
+            "content": {
+                "application/json": {
+                    "example": {"status": "starting", "database_schema": "outdated"}
+                }
+            },
+        }
+    },
+)
+async def check_startup(response: Response, db: DbSession) -> dict[str, str]:
+    """Return 200 when the database schema is current, else 503."""
+    response.headers.update(NO_STORE)
+    schema = await schema_status(db)
+    if schema != "current":
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        return {"status": "starting", "database_schema": schema}
+    return {"status": "started", "database_schema": schema}
 
 
 @router.get(
