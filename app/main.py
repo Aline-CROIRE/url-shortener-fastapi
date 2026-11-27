@@ -21,6 +21,7 @@ from app.core.middleware import (
     SecurityHeadersMiddleware,
 )
 from app.core.rate_limit import limiter, rate_limit_exceeded_handler
+from app.core.tracing import instrument_api, instrument_engines, setup_tracing
 from app.db.database import create_engine, create_read_engine, create_session_factory
 from app.worker.tasks import track_click_task
 from app.worker.tracker import CeleryClickTracker
@@ -61,6 +62,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             engine, settings.database_replica_url, settings.db_echo, *pool
         )
         app.state.read_engine = read_engine
+        # Trace every SQL statement (no-op when tracing is off); a replica has its own engine
+        replica = [read_engine.sync_engine] if settings.database_replica_url else []
+        instrument_engines(engine.sync_engine, *replica)
         app.state.read_session_factory = create_session_factory(read_engine)
 
         # Redirect cache: Redis if REDIS_URL is set, otherwise a cache that does nothing
@@ -82,6 +86,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         yield  # the app handles requests here
 
         # Shutdown: runs once, when the server stops
+        if tracer_provider is not None:
+            tracer_provider.shutdown()  # send the spans still waiting in the batch
         if redis_client is not None:
             await redis_client.aclose()
         if settings.database_replica_url:
@@ -99,6 +105,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     # Application-level data: every request can read it via request.app.state
     app.state.settings = settings
+    # Tracing (OpenTelemetry): None unless OTEL_EXPORTER_OTLP_ENDPOINT is set
+    tracer_provider = setup_tracing(settings, "api")
+    app.state.tracer_provider = tracer_provider
+    if tracer_provider is not None:
+        instrument_api(app, tracer_provider)
 
     # Added first = innermost: a 413 for a too-large body is still logged and gets
     # the security headers from the two middlewares around it

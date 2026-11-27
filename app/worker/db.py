@@ -11,6 +11,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import get_settings
+from app.core.tracing import instrument_engines
 
 # Each worker PROCESS runs one task at a time, so it needs one connection,
 # plus one spare (e.g. while a broken connection is replaced)
@@ -32,4 +33,5 @@ def get_session_factory() -> sessionmaker[Session]:
         max_overflow=WORKER_MAX_OVERFLOW,
         pool_pre_ping=True,  # test a pooled connection first (survives DB restarts)
     )
+    instrument_engines(engine)  # trace its SQL (no-op when tracing is off)
     return sessionmaker(engine, expire_on_commit=False)

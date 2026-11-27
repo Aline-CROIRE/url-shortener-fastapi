@@ -54,6 +54,13 @@ class Settings(BaseSettings):
     app_version: str = "0.1.0"
     environment: Literal["development", "production", "testing"] = "development"
     debug: bool = False
+    # ---------- OpenTelemetry tracing (standard OTEL_* names) ----------
+    # Where traces go, over OTLP/HTTP, e.g. http://jaeger:4318. Empty = tracing OFF
+    otel_exporter_otlp_endpoint: str = ""
+    # Shown in the tracing UI as "<name>-api" and "<name>-worker"
+    otel_service_name: str = "url-shortener"
+    # Share of new traces kept: 1.0 = all (development), e.g. 0.1 = 10% under heavy load
+    otel_traces_sampler_ratio: float = Field(default=1.0, ge=0.0, le=1.0)
     # Protects GET /metrics: Prometheus must send "Authorization: Bearer <token>".
     # Not set = open (fine when /metrics is only reachable on an internal network)
     metrics_token: SecretStr | None = None

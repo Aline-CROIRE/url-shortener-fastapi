@@ -9,9 +9,11 @@ from typing import Any
 from celery import Celery
 from celery.schedules import crontab
 from celery.signals import setup_logging as celery_setup_logging
+from celery.signals import worker_process_init, worker_process_shutdown
 
 from app.core.config import get_settings
 from app.core.logging import setup_logging
+from app.core.tracing import current_provider, instrument_worker, setup_tracing
 
 
 def create_celery_app(broker_url: str) -> Celery:
@@ -58,6 +60,26 @@ def use_app_logging(**kwargs: Any) -> None:
     """
     settings = get_settings()
     setup_logging(settings.debug, settings.log_format, force=True)
+
+
+@worker_process_init.connect
+def start_worker_tracing(**kwargs: Any) -> None:
+    """Start tracing in each worker process (no-op without OTEL_EXPORTER_OTLP_ENDPOINT).
+
+    After the fork, not before: the exporter sends spans from a background thread,
+    and threads are not copied into a forked process.
+    """
+    provider = setup_tracing(get_settings(), "worker")
+    if provider is not None:
+        instrument_worker(provider)
+
+
+@worker_process_shutdown.connect
+def stop_worker_tracing(**kwargs: Any) -> None:
+    """Send the spans still waiting in the batch before the process ends."""
+    provider = current_provider()
+    if provider is not None:
+        provider.shutdown()
 
 
 celery_app = create_celery_app(get_settings().celery_broker_url)

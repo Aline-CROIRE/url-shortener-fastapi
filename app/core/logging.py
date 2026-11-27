@@ -17,6 +17,8 @@ from contextvars import ContextVar
 from datetime import UTC, datetime
 from typing import Any, Literal
 
+from opentelemetry import trace
+
 # Longest piece of client input written into one log line
 MAX_LOGGED_LENGTH = 100
 
@@ -49,6 +51,11 @@ class RequestContextFilter(logging.Filter):
             record.method = request_method_var.get()
         if getattr(record, "path", None) is None:
             record.path = request_path_var.get()
+        # Inside a traced span: its ids link this line to the trace (OpenTelemetry)
+        span_context = trace.get_current_span().get_span_context()
+        if span_context.is_valid:
+            record.trace_id = format(span_context.trace_id, "032x")  # 32 hex characters
+            record.span_id = format(span_context.span_id, "016x")
         return True  # a filter could also DROP records; this one never does
 
 
@@ -100,8 +107,8 @@ class JsonFormatter(logging.Formatter):
             "path": getattr(record, "path", None),
             "method": getattr(record, "method", None),
         }
-        # Only on the access line (see RequestLoggingMiddleware)
-        for field in ("status", "duration_ms"):
+        # Only when present: the access line (status, duration) and traced lines (ids)
+        for field in ("status", "duration_ms", "trace_id", "span_id"):
             if hasattr(record, field):
                 line[field] = getattr(record, field)
         if record.exc_info:
