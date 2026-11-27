@@ -150,3 +150,62 @@ same SQL is run by two drivers, so the statements live in one shared function.
 | Drop a click whose URL row is gone | No endless retries | Such clicks are lost (logged) |
 | Early ack (Celery default) | A click is never saved twice | If a worker crashes mid-task, that click is lost |
 | Cache hit uses no database | Popular links work even while the DB is down | A row removed outside the API stays cached until its TTL (max 15 min) |
+
+## Phase 4 — Periodic task with Celery Beat (nightly archive)
+
+**Goal.** Every night at 02:00 UTC, switch off (`is_active = false`) every live URL
+whose expiry has passed, with ONE bulk UPDATE, then remove their cached
+redirects. Like a library at closing time: one librarian walks the shelves once
+with a list and pulls every overdue book in one round, instead of opening the
+building once per book. Beat is the alarm clock that tells her when; the worker
+does the walking.
+
+**The flow**
+1. `celery-beat` reads `beat_schedule` and, at 02:00 UTC, puts `urls.archive_expired` on the queue.
+2. A worker runs `archive_expired_urls_task`:
+   `UPDATE urls SET is_active = false, updated_at = now() WHERE is_active AND deleted_at IS NULL AND expires_at <= :now RETURNING short_code`
+3. After the commit: `DELETE url:redirect:<code> ...` in batches of 500.
+4. Logs `Archived N expired URLs`.
+
+**What changed**
+
+| File | Change |
+|---|---|
+| `app/repositories/url.py` | `archive_expired_statement(now)`: one bulk UPDATE ... RETURNING short_code |
+| `app/worker/tasks.py` | `archive_expired_urls_task` (retries DB errors; safe to run twice) |
+| `app/worker/cache.py` | New: the worker's sync Redis client + `clear_cached_redirects()` (batches, errors only logged) |
+| `app/worker/celery_app.py` | `beat_schedule`: `crontab(hour=2, minute=0)` |
+| `app/services/redirect.py` | 410 reason: expiry is checked before `is_active`, so an archived link still says `url_expired` |
+| `tests/test_archive.py` | What is archived, one UPDATE, cache keys, Redis down, schedule, 410 reason, owner revives a link, the race with an owner (two real connections) |
+
+**Seen live (Docker):** 1095 expired URLs (old seed data) archived in 0.5 s with one
+UPDATE; the visited link then answered 410 `url_expired`.
+
+**The race, and why the WHERE is in the UPDATE itself**
+Owner: `BEGIN; UPDATE urls SET expires_at = <next week> WHERE id = 7;` (holds the row lock)
+Archive: `UPDATE ... WHERE ... expires_at <= now` reaches row 7 and **waits**.
+Owner: `COMMIT`. Postgres then **re-checks the archive's WHERE on the new row**
+(READ COMMITTED): next week is not `<= now`, so row 7 is skipped. If we had first
+SELECTed the ids and then updated "WHERE id IN (...)", the old snapshot would win
+and the owner's fresh extension would be switched off. A test proves both ways
+(we broke the code on purpose and the test failed).
+
+**Behaviour changes (explained)**
+- A link that is switched off AND expired now answers `url_expired` (was `url_inactive`).
+- An archived link stays off if the owner only extends `expires_at`; they send
+  `{"is_active": true, "expires_at": ...}` (the Free limit is checked again then).
+- Archiving sets `updated_at`: it is a real change of the link (unlike a click).
+
+**Tradeoffs**
+
+| Choice | Gain | Cost |
+|---|---|---|
+| One bulk UPDATE (not one per URL) | 1 round trip for 1095 rows (0.5 s) | All matching rows are locked until the commit; a huge backlog = one long transaction |
+| `RETURNING short_code` | Codes for the cache cleanup without a second query | Holds every code in memory (fine for thousands) |
+| WHERE inside the UPDATE (no SELECT first) | Postgres re-checks rows changed meanwhile: no lost extension | — |
+| Same "expired" rule as the redirect (`<=`) | Visitors and the archive never disagree | Spec text said `<`; the difference is one instant |
+| Clear cache after commit; errors only logged | The DB change always stands | If Redis is down, entries live until their TTL (already capped at the expiry) |
+| DELETE in batches of 500 | Redis is never blocked by one giant command | A few more round trips |
+| Nightly at 02:00 UTC with `crontab` | Quiet hour; one run a day | A link can stay "on but expired" up to a day (visitors still get 410) |
+| Exactly one beat container | Each job queued once | If beat is down, the night's run is skipped (the next one catches up) |
+| Task safe to run twice | Retries and manual runs are harmless | — |
