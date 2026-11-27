@@ -169,3 +169,31 @@ def test_a_dead_worker_no_longer_counts_as_in_progress(load_conf: Any, tmp_path:
 
     assert not (tmp_path / "gauge_livesum_4242.db").exists()  # "live" values die with it
     assert (tmp_path / "counter_4242.db").exists()  # what it counted still counts
+
+
+def test_gunicorn_threads_are_not_used(load_conf: Any) -> None:
+    conf = load_conf(WEB_CONCURRENCY="2")
+
+    # Gunicorn's "threads" only works with its sync/gthread workers; a UvicornWorker
+    # ignores it. Blocking work uses AnyIO's pool (THREAD_POOL_SIZE) instead.
+    assert "threads" not in conf
+
+
+def test_workers_are_recycled_rarely(load_conf: Any) -> None:
+    conf = load_conf(WEB_CONCURRENCY="2")
+
+    # Load test: a worker reaching max_requests closes its keep-alive connections, and
+    # clients that reuse one at that moment get "connection reset" (8 of 3709 requests
+    # with max_requests=1000). The profile showed no memory leak, so recycling is a
+    # rare safety net, not a routine.
+    assert conf["max_requests"] >= 10_000
+    assert conf["max_requests_jitter"] >= conf["max_requests"] // 10
+
+
+def test_unused_control_socket_is_off(load_conf: Any) -> None:
+    conf = load_conf(WEB_CONCURRENCY="2")
+
+    # Gunicorn 26's runtime control socket (for gunicornc) is not used: Docker and the
+    # orchestrator manage the processes. Off = no error (the app user has no home
+    # folder for the socket) and one admin interface less.
+    assert conf["control_socket_disable"] is True
