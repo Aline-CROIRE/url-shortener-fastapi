@@ -79,6 +79,9 @@ class Settings(BaseSettings):
     # Celery's job queue (the "broker"). Another Redis DB number than the cache
     # (/1, cache /0): clearing the cache can never delete queued jobs.
     celery_broker_url: str = "redis://127.0.0.1:6379/1"
+    # MaxMind GeoLite2-City file for click locations (used by the Celery worker).
+    # Empty = no lookup: clicks are saved with an "Unknown" country and city.
+    geoip_database_path: str = ""
     # ---------- production sizing (see app/core/capacity.py for the math) ----------
     # Gunicorn worker processes. Empty = 2 x CPU cores + 1. The standard name
     # (Uvicorn and most hosting platforms read WEB_CONCURRENCY too).

@@ -11,6 +11,7 @@ from app.services.clicks import ClickEvent, click_statements
 from app.worker.cache import clear_cached_redirects, get_redis
 from app.worker.celery_app import celery_app
 from app.worker.db import get_session_factory
+from app.worker.geoip import get_geoip_reader, locate
 
 logger = logging.getLogger(__name__)
 
@@ -47,11 +48,13 @@ def track_click_task(
         True if saved, False if dropped because the URL no longer exists.
     """
     event = ClickEvent.from_task_args(url_id, ip_address, user_agent, referrer, clicked_at)
+    # Country and city from the IP (an in-memory lookup, no network); UNKNOWN without a database
+    location = locate(get_geoip_reader(), event.ip_address)
     try:
         # sessionmaker.begin(): BEGIN, then COMMIT at the end, or ROLLBACK on any
         # error, so a retry never finds a half-saved click
         with get_session_factory().begin() as session:
-            for statement in click_statements(event):
+            for statement in click_statements(event, location.country, location.city):
                 session.execute(statement)
     except IntegrityError as exc:
         if not is_foreign_key_violation(exc):

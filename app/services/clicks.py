@@ -70,10 +70,12 @@ class ClickEvent:
         return cls(int(url_id), valid_ip(ip_address), user_agent, referrer, parse_time(clicked_at))
 
 
-def click_statements(event: ClickEvent) -> tuple[Insert, Update]:
+def click_statements(
+    event: ClickEvent, country: str | None = None, city: str | None = None
+) -> tuple[Insert, Update]:
     """Return the two writes of one click; run them in ONE transaction (all or nothing).
 
-    1. INSERT a row into clicks (the visitor's book)
+    1. INSERT a row into clicks (the visitor's book), with the location if known
     2. UPDATE urls SET click_count = click_count + 1 (computed by Postgres)
     """
     values: dict[str, object] = {
@@ -81,6 +83,8 @@ def click_statements(event: ClickEvent) -> tuple[Insert, Update]:
         "ip_address": ip_address(event.ip_address) if event.ip_address else None,
         "user_agent": event.user_agent,
         "referrer": event.referrer,
+        "country": country,  # filled by the worker's GeoIP lookup (app/worker/geoip.py)
+        "city": city,
     }
     if event.clicked_at is not None:
         values["clicked_at"] = event.clicked_at  # else the column's default: now()
