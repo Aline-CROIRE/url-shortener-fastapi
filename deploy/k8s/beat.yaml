@@ -1,0 +1,64 @@
+# Celery beat: the clock that queues the nightly archive. EXACTLY ONE, always.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: url-shortener-beat
+spec:
+  replicas: 1
+  # Recreate: the old pod stops BEFORE the new one starts. A rolling update would run
+  # two beats for a moment, and every scheduled job due then would be sent twice.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: url-shortener-beat
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: url-shortener-beat
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+      containers:
+        - name: beat
+          image: url-shortener:0.1.0
+          command:
+            - celery
+            - -A
+            - app.worker.celery_app:celery_app
+            - beat
+            - --loglevel=INFO
+            - --schedule=/tmp/celerybeat-schedule
+            - --pidfile=/tmp/celerybeat.pid
+          envFrom:
+            - configMapRef:
+                name: url-shortener-config
+            - secretRef:
+                name: url-shortener-secrets
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 256Mi}
+          # LIVENESS: the process named in the pid file is still running
+          livenessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - import os; os.kill(int(open('/tmp/celerybeat.pid').read()), 0)
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

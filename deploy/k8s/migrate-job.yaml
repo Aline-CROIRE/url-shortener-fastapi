@@ -1,0 +1,36 @@
+# Brings the database to the newest migration, once per release, BEFORE the new API
+# pods take traffic (their startup probe waits for exactly this). Run it again for a
+# new release: kubectl delete job url-shortener-migrate && kubectl apply -k deploy/k8s
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: url-shortener-migrate
+spec:
+  backoffLimit: 3 # retry a failed migration up to 3 times (e.g. database restarting)
+  ttlSecondsAfterFinished: 3600 # remove the finished Job after an hour
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: url-shortener-migrate
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+      containers:
+        - name: migrate
+          image: url-shortener:0.1.0
+          command: ["alembic", "upgrade", "head"]
+          envFrom:
+            - configMapRef:
+                name: url-shortener-config
+            - secretRef:
+                name: url-shortener-secrets
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]

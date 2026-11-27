@@ -1,0 +1,14 @@
+# Everything except the Secret (create that yourself, see secret.example.yaml):
+#   kubectl apply -k deploy/k8s
+# PostgreSQL and Redis are not here: in production they are managed services.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: url-shortener
+resources:
+  - configmap.yaml
+  - migrate-job.yaml
+  - api.yaml
+  - worker.yaml
+  - beat.yaml

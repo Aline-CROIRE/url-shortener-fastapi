@@ -1,0 +1,28 @@
+# Settings that are NOT secret (secrets: secret.example.yaml). Every pod reads both.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: url-shortener-config
+data:
+  ENVIRONMENT: production
+  DEBUG: "false"
+  LOG_FORMAT: json
+  BASE_URL: https://sho.rt.example
+  # Managed Redis: DB 0 = cache + rate limits, DB 1 = Celery's queue
+  REDIS_URL: redis://redis:6379/0
+  CELERY_BROKER_URL: redis://redis:6379/1
+  # Sizing. WEB_CONCURRENCY is ALWAYS set: inside a container os.cpu_count() sees the
+  # node's cores (e.g. 64), not the pod's CPU, so "2 x CPU + 1" would be far too many.
+  # Connection math (tests/test_kubernetes.py checks it):
+  #   2 API pods x 2 workers x (3 + 2) + 1 worker pod x 2 processes x 2 = 24  (<= 100 - 10)
+  WEB_CONCURRENCY: "2"
+  DB_POOL_SIZE: "3"
+  DB_MAX_OVERFLOW: "2"
+  DB_POOL_TIMEOUT: "10"
+  DB_MAX_CONNECTIONS: "100"
+  CELERY_CONCURRENCY: "2"
+  THREAD_POOL_SIZE: "40"
+  # Traces: keep 10% (set OTEL_EXPORTER_OTLP_ENDPOINT to your collector to switch on)
+  OTEL_TRACES_SAMPLER_RATIO: "0.1"
+  # Trust X-Forwarded-For only from the ingress controller's pods (your cluster's range)
+  FORWARDED_ALLOW_IPS: 10.0.0.0/8

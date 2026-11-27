@@ -80,6 +80,12 @@ jobs:
       - name: Lint
         run: ruff check .
 
+      # Kubernetes manifests against the official schemas (strict: unknown fields fail)
+      - name: Validate Kubernetes manifests
+        run: >-
+          docker run --rm -v "$PWD/deploy/k8s:/k8s:ro" ghcr.io/yannh/kubeconform:v0.7.0
+          -strict -summary -skip Kustomization -kubernetes-version 1.33.0 /k8s
+
       - name: Formatting
         run: ruff format --check .
 
