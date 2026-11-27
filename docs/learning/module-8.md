@@ -432,3 +432,34 @@ Answer in your own words first, then open the answers.
     "too many clients already" at peak traffic.
 
 </details>
+
+## Phase 8 — Brief fixes after the final review
+
+A line-by-line check against the Module 8 brief and learning objectives found two things.
+
+**1. The brief's exact task call failed.** The brief writes
+`track_click_task.delay(url_id, ip_address, user_agent)`; our task required a 4th
+argument (`referrer`), so that exact call raised `TypeError`. Now `referrer` and
+`clicked_at` are optional: the brief's call works word for word (a test makes exactly
+that call, and it was run on the live worker), and the API still sends all five values.
+
+**2. The health checks waited one after the other.** FastAPI resolves dependencies in
+sequence, so DB, replica and Redis checks added up (test: two 0.5 s checks = 1.02 s).
+Now the route starts all three with `asyncio.gather` and waits for all of them: the
+slowest one decides (0.5 s). This is the async/await pattern of the first learning
+objective: while one check waits for the network, the others run.
+
+```python
+database_ok, replica_ok, cache_ok = await asyncio.gather(
+    database_is_up(db),
+    replica_is_up(read_db, settings.database_replica_url),
+    cache_is_up(cache),
+)
+```
+Each check uses its own session (one connection each): a single connection can never run
+two queries at the same time.
+
+| Choice | Gain | Cost |
+|---|---|---|
+| Optional `referrer` / `clicked_at` | The brief's call works; old messages in the queue still work | Two ways to call the task |
+| `asyncio.gather` for the checks | Probe time = slowest check, not the sum | Two database connections at once during a check (primary + replica) |
