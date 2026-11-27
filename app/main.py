@@ -49,12 +49,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # Startup: runs once, before the first request.
         # WRITE side: one engine (connection pool) + sessionmaker on the primary
-        engine = create_engine(settings.database_url, echo=settings.db_echo)
+        # Pool size, overflow, timeout: every Gunicorn worker opens its own pool
+        pool = (settings.db_pool_size, settings.db_max_overflow, settings.db_pool_timeout)
+        engine = create_engine(settings.database_url, settings.db_echo, *pool)
         app.state.engine = engine
         app.state.session_factory = create_session_factory(engine)
         # READ side: the replica if DATABASE_REPLICA_URL is set, else the primary's
         # pool; always read-only
-        read_engine = create_read_engine(engine, settings.database_replica_url, settings.db_echo)
+        read_engine = create_read_engine(
+            engine, settings.database_replica_url, settings.db_echo, *pool
+        )
         app.state.read_engine = read_engine
         app.state.read_session_factory = create_session_factory(read_engine)
 

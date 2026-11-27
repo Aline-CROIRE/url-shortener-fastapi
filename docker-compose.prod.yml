@@ -11,6 +11,7 @@ x-app-environment: &app-environment
   REDIS_URL: redis://redis:6379/0
   CELERY_BROKER_URL: redis://redis:6379/1
   BASE_URL: ${BASE_URL:-http://localhost:8000}
+  CELERY_CONCURRENCY: ${CELERY_CONCURRENCY:-2}  # Celery processes (also in the connection math)
   JWT_SECRET_KEY: ${JWT_SECRET_KEY:?set JWT_SECRET_KEY (32+ random characters)}  # signs tokens
 
 services:
@@ -20,7 +21,10 @@ services:
       - "8000:8000"
     environment:
       <<: *app-environment
-      WORKERS: ${WORKERS:-4}
+      # Gunicorn workers (empty = 2 x CPU cores + 1). Gunicorn refuses to start if
+      # WEB_CONCURRENCY x (DB_POOL_SIZE + DB_MAX_OVERFLOW) + Celery does not fit in
+      # PostgreSQL's max_connections (app/core/capacity.py)
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-4}
       # Behind a reverse proxy: its IP, so Gunicorn trusts X-Forwarded-For from it
       # (and ONLY from it) and the rate limits count real client addresses
       FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}

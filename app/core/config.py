@@ -79,8 +79,20 @@ class Settings(BaseSettings):
     # Celery's job queue (the "broker"). Another Redis DB number than the cache
     # (/1, cache /0): clearing the cache can never delete queued jobs.
     celery_broker_url: str = "redis://127.0.0.1:6379/1"
-    # Number of Gunicorn worker processes in production (see gunicorn.conf.py)
-    workers: int = Field(default=2, ge=1)
+    # ---------- production sizing (see app/core/capacity.py for the math) ----------
+    # Gunicorn worker processes. Empty = 2 x CPU cores + 1. The standard name
+    # (Uvicorn and most hosting platforms read WEB_CONCURRENCY too).
+    web_concurrency: int | None = Field(default=None, ge=1)
+    # Database connections kept open per web worker, plus extra ones for busy moments
+    db_pool_size: int = Field(default=3, ge=1)
+    db_max_overflow: int = Field(default=2, ge=0)
+    # Seconds a request waits for a free pooled connection before it fails
+    db_pool_timeout: float = Field(default=10, gt=0)
+    # PostgreSQL's max_connections (SHOW max_connections); Gunicorn refuses to start
+    # if the workers could need more
+    db_max_connections: int = Field(default=100, ge=20)
+    # Celery worker processes (the --concurrency of the celery-worker container)
+    celery_concurrency: int = Field(default=2, ge=1)
 
     # ---------- JWT (Module 7) ----------
     # Signs and checks every token. REQUIRED, no default: a default would be written in

@@ -13,16 +13,36 @@ from sqlalchemy.ext.asyncio import (
 )
 
 
-def create_engine(database_url: str, echo: bool = False) -> AsyncEngine:
-    """Create the engine: the app's one shared connection pool to PostgreSQL."""
+def create_engine(
+    database_url: str,
+    echo: bool = False,
+    pool_size: int = 5,
+    max_overflow: int = 10,
+    pool_timeout: float = 30,
+) -> AsyncEngine:
+    """Create the engine: this process's one shared connection pool to PostgreSQL.
+
+    Defaults are SQLAlchemy's; the app passes DB_POOL_SIZE, DB_MAX_OVERFLOW and
+    DB_POOL_TIMEOUT. Each Gunicorn worker has its own pool (app/core/capacity.py).
+    """
     return create_async_engine(
         database_url,
         echo=echo,  # True = log every SQL statement
         pool_pre_ping=True,  # test a pooled connection before use (survives DB restarts)
+        pool_size=pool_size,  # connections kept open
+        max_overflow=max_overflow,  # extra ones opened for a busy moment, then closed
+        pool_timeout=pool_timeout,  # seconds to wait for a free connection, then fail
     )
 
 
-def create_read_engine(primary: AsyncEngine, replica_url: str, echo: bool = False) -> AsyncEngine:
+def create_read_engine(
+    primary: AsyncEngine,
+    replica_url: str,
+    echo: bool = False,
+    pool_size: int = 5,
+    max_overflow: int = 10,
+    pool_timeout: float = 30,
+) -> AsyncEngine:
     """Create the engine for READ-ONLY queries.
 
     - With a replica URL: its own pool, connected to the replica.
@@ -30,7 +50,11 @@ def create_read_engine(primary: AsyncEngine, replica_url: str, echo: bool = Fals
     Either way every transaction is READ ONLY, so a write sent down the read path
     fails at once ("cannot execute INSERT in a read-only transaction").
     """
-    base = create_engine(replica_url, echo=echo) if replica_url else primary
+    base = (
+        create_engine(replica_url, echo, pool_size, max_overflow, pool_timeout)
+        if replica_url
+        else primary
+    )
     return base.execution_options(postgresql_readonly=True)
 
 
