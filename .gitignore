@@ -11,3 +11,6 @@ htmlcov/
 # Celery beat schedule when beat runs outside Docker
 celerybeat-schedule*
 celerybeat.pid
+
+# MaxMind GeoLite2 files: licensed data, downloaded by each user (see geoip/README.md)
+geoip/*.mmdb

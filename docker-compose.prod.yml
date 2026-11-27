@@ -41,6 +41,9 @@ services:
     command: celery -A app.worker.celery_app:celery_app worker --loglevel=INFO --concurrency=${CELERY_CONCURRENCY:-2}
     environment:
       <<: *app-environment
+      GEOIP_DATABASE_PATH: ${GEOIP_DATABASE_PATH:-}  # e.g. /app/geoip/GeoLite2-City.mmdb
+    volumes:
+      - ./geoip:/app/geoip:ro  # optional GeoLite2-City file (licensed data: never in git or the image)
     healthcheck:
       test: ["CMD-SHELL", "celery -A app.worker.celery_app:celery_app inspect ping -d celery@$$HOSTNAME --timeout 5"]
       interval: 30s

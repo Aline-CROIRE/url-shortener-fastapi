@@ -49,8 +49,11 @@ services:
         required: false # same settings as the app (environment below wins)
     environment:
       <<: *app-environment
+      # Optional click geo-location: a GeoLite2-City file placed in ./geoip/
+      GEOIP_DATABASE_PATH: ${GEOIP_DATABASE_PATH:-}
     volumes:
       - ./app:/app/app
+      - ./geoip:/app/geoip:ro # read-only; the .mmdb file is never committed
     healthcheck:
       # "Are you alive?" sent through the broker; only this container's worker answers
       test: ["CMD-SHELL", "celery -A app.worker.celery_app:celery_app inspect ping -d celery@$$HOSTNAME --timeout 5"]
